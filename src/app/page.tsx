@@ -103,12 +103,18 @@ export default function Home() {
     setLoading(true);
 
     try {
+      // Get current conversation messages for context
+      const currentConv = currentConvs.find((c) => c.id === targetId);
+      const history = currentConv
+        ? currentConv.messages.map((m) => ({ role: m.role, content: m.content }))
+        : [];
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: text,
-          conversationId: targetId,
+          messages: [...history, { role: "user", content: text }],
         }),
       });
 

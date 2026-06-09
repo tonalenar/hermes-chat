@@ -1,85 +1,91 @@
 import { NextRequest, NextResponse } from "next/server";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 
-const exec = promisify(execFile);
+const NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const MODEL = "deepseek-ai/deepseek-v4-flash";
 
-// Track sessions per conversation
-const sessions = new Map<string, string>();
-
-const HERMES_ENV = {
-  ...process.env,
-  HERMES_HOME: "/home/ubuntu/.hermes",
-  PATH: `/home/ubuntu/.hermes/hermes-agent/venv/bin:/home/ubuntu/.nvm/versions/node/v24.16.0/bin:${process.env.PATH}`,
-};
-
-async function callHermes(message: string, sessionId?: string): Promise<{ response: string; sessionId: string }> {
-  const args = ["chat", "-q", message, "-Q"];
-  if (sessionId) {
-    args.push("--resume", sessionId);
-  }
-
-  const { stdout, stderr } = await exec("hermes", args, {
-    env: HERMES_ENV,
-    timeout: 120_000,
-    maxBuffer: 5 * 1024 * 1024,
-  });
-
-  const rawOutput = (stdout || "").trim();
-  if (!rawOutput) {
-    throw new Error("Empty response from Hermes");
-  }
-
-  // Parse session_id from stderr
-  let newSessionId = sessionId || "";
-  if (stderr) {
-    const match = stderr.match(/session_id:\s*(\S+)/);
-    if (match) newSessionId = match[1];
-  }
-
-  // Clean stdout
-  const lines = rawOutput.split("\n");
-  const clean = lines.filter((l) => {
-    const t = l.trim();
-    if (!t) return false;
-    if (t.startsWith("session_id:")) return false;
-    if (/^[─╭╰╮╯│┌┐└┘├┤┬┴┼]+$/.test(t)) return false;
-    return true;
-  });
-
-  const response = clean.join("\n").trim() || rawOutput;
-  return { response, sessionId: newSessionId };
+interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
 }
+
+const SYSTEM_PROMPT = `You are Hermes, an AI assistant created by Nous Research. You are running inside the Hermes Chat web interface.
+
+Guidelines:
+- Be helpful, concise, and accurate
+- Respond in the same language the user writes in (Portuguese if they write in Portuguese)
+- You have access to web search, code execution, and file tools through the Hermes Agent platform
+- When asked about your capabilities, mention you're powered by Hermes Agent
+- Be friendly but professional
+- Format responses with markdown when appropriate`;
 
 export async function POST(req: NextRequest) {
   try {
-    const { message, conversationId } = await req.json();
+    const { message, messages } = await req.json();
 
-    if (!message || typeof message !== "string") {
-      return NextResponse.json({ error: "Message is required" }, { status: 400 });
+    if (!message && !messages) {
+      return NextResponse.json(
+        { error: "Message is required" },
+        { status: 400 }
+      );
     }
 
-    const existingSession = conversationId ? sessions.get(conversationId) : undefined;
-    const result = await callHermes(message, existingSession);
-
-    if (conversationId && result.sessionId) {
-      sessions.set(conversationId, result.sessionId);
+    const apiKey = process.env.NVIDIA_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "NVIDIA_API_KEY not configured" },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({
-      response: result.response,
-      sessionId: result.sessionId,
+    // Build messages array for the API
+    const chatMessages: ChatMessage[] = [
+      { role: "system", content: SYSTEM_PROMPT },
+    ];
+
+    // If full conversation history is provided, use it
+    if (messages && Array.isArray(messages)) {
+      for (const msg of messages) {
+        chatMessages.push({
+          role: msg.role === "assistant" ? "assistant" : "user",
+          content: msg.content,
+        });
+      }
+    } else if (message) {
+      chatMessages.push({ role: "user", content: message });
+    }
+
+    const response = await fetch(NVIDIA_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: chatMessages,
+        temperature: 0.7,
+        max_tokens: 4096,
+        stream: false,
+      }),
     });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error("NVIDIA API error:", response.status, errText);
+      return NextResponse.json(
+        { error: `API error: ${response.status}` },
+        { status: 502 }
+      );
+    }
+
+    const data = await response.json();
+    const reply =
+      data.choices?.[0]?.message?.content || "No response from model.";
+
+    return NextResponse.json({ response: reply });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Unknown error";
-    console.error("API error:", msg);
-
-    if (msg.includes("ETIMEDOUT") || msg.includes("timed out")) {
-      return NextResponse.json({ error: "Request timed out" }, { status: 504 });
-    }
-    if (msg.includes("ENOENT")) {
-      return NextResponse.json({ error: "Hermes CLI not found" }, { status: 500 });
-    }
+    console.error("Chat API error:", msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
