@@ -108,9 +108,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: text,
-          conversationHistory: currentConvs
-            .find((c) => c.id === targetId)
-            ?.messages.map((m) => ({ role: m.role, content: m.content })) || [],
+          conversationId: targetId,
         }),
       });
 

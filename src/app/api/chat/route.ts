@@ -1,54 +1,75 @@
 import { NextRequest, NextResponse } from "next/server";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const exec = promisify(execFile);
+
+// Track sessions per conversation
+const sessions = new Map<string, string>();
+
+const HERMES_ENV = {
+  ...process.env,
+  HERMES_HOME: "/home/ubuntu/.hermes",
+  PATH: `/home/ubuntu/.hermes/hermes-agent/venv/bin:/home/ubuntu/.nvm/versions/node/v24.16.0/bin:${process.env.PATH}`,
+};
+
+async function callHermes(message: string, sessionId?: string): Promise<{ response: string; sessionId: string }> {
+  const args = ["chat", "-q", message, "-Q"];
+  if (sessionId) {
+    args.push("--resume", sessionId);
+  }
+
+  const { stdout, stderr } = await exec("hermes", args, {
+    env: HERMES_ENV,
+    timeout: 120_000,
+    maxBuffer: 5 * 1024 * 1024,
+  });
+
+  const rawOutput = (stdout || "").trim();
+  if (!rawOutput) {
+    throw new Error("Empty response from Hermes");
+  }
+
+  // Parse session_id from stderr
+  let newSessionId = sessionId || "";
+  if (stderr) {
+    const match = stderr.match(/session_id:\s*(\S+)/);
+    if (match) newSessionId = match[1];
+  }
+
+  // Clean stdout
+  const lines = rawOutput.split("\n");
+  const clean = lines.filter((l) => {
+    const t = l.trim();
+    if (!t) return false;
+    if (t.startsWith("session_id:")) return false;
+    if (/^[─╭╰╮╯│┌┐└┘├┤┬┴┼]+$/.test(t)) return false;
+    return true;
+  });
+
+  const response = clean.join("\n").trim() || rawOutput;
+  return { response, sessionId: newSessionId };
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const { message, conversationHistory } = await req.json();
+    const { message, conversationId } = await req.json();
 
     if (!message || typeof message !== "string") {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
     }
 
-    // Build prompt with context
-    let prompt = message;
-    if (conversationHistory?.length > 0) {
-      const ctx = conversationHistory
-        .slice(-10)
-        .map((m: { role: string; content: string }) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
-        .join("\n");
-      prompt = `Context:\n${ctx}\n\nUser: ${message}`;
+    const existingSession = conversationId ? sessions.get(conversationId) : undefined;
+    const result = await callHermes(message, existingSession);
+
+    if (conversationId && result.sessionId) {
+      sessions.set(conversationId, result.sessionId);
     }
 
-    // Call hermes CLI
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const exec = promisify(execFile);
-
-    const { stdout } = await exec("hermes", ["chat", "-q", prompt, "-Q"], {
-      env: {
-        ...process.env,
-        HERMES_HOME: "/home/ubuntu/.hermes",
-        PATH: `/home/ubuntu/.hermes/hermes-agent/venv/bin:/home/ubuntu/.nvm/versions/node/v24.16.0/bin:${process.env.PATH}`,
-      },
-      timeout: 120_000,
-      maxBuffer: 5 * 1024 * 1024,
+    return NextResponse.json({
+      response: result.response,
+      sessionId: result.sessionId,
     });
-
-    if (!stdout?.trim()) {
-      return NextResponse.json({ error: "Empty response from Hermes" }, { status: 500 });
-    }
-
-    // Parse: skip session_id line and box-drawing chars
-    const lines = stdout.trim().split("\n");
-    const clean = lines.filter((l) => {
-      const t = l.trim();
-      if (!t) return false;
-      if (t.startsWith("session_id:")) return false;
-      if (/^[─╭╰╮╯│┌┐└┘├┤┬┴┼]+$/.test(t)) return false;
-      return true;
-    });
-
-    const response = clean.join("\n").trim() || stdout.trim();
-    return NextResponse.json({ response });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Unknown error";
     console.error("API error:", msg);
