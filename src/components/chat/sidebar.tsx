@@ -4,12 +4,7 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Plus, MessageSquare, Trash2, Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  Conversation,
-  getConversations,
-  createConversation,
-  deleteConversation,
-} from "@/lib/store";
+import { Conversation, getConversations, deleteConversation } from "@/lib/store";
 
 interface SidebarProps {
   activeConversationId: string | null;
@@ -19,27 +14,28 @@ interface SidebarProps {
 
 export function Sidebar({ activeConversationId, onSelect, onNew }: SidebarProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [isOpen, setIsOpen] = useState(true);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
   useEffect(() => {
     setConversations(getConversations());
+  }, [activeConversationId]);
+
+  useEffect(() => {
     const handleStorage = () => setConversations(getConversations());
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
 
-  const refresh = () => setConversations(getConversations());
-
   const handleNew = () => {
     onNew();
-    setTimeout(refresh, 50);
+    setIsMobileOpen(false);
+    setTimeout(() => setConversations(getConversations()), 50);
   };
 
   const handleDelete = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     deleteConversation(id);
-    refresh();
+    setConversations(getConversations());
   };
 
   const sidebarContent = (
@@ -54,7 +50,7 @@ export function Sidebar({ activeConversationId, onSelect, onNew }: SidebarProps)
             <span className="text-white/90 font-medium text-sm">Hermes Chat</span>
           </div>
           <button
-            onClick={() => setIsOpen(false)}
+            onClick={() => setIsMobileOpen(false)}
             className="lg:hidden p-1 text-white/40 hover:text-white/90 rounded"
           >
             <X className="w-4 h-4" />
@@ -106,30 +102,29 @@ export function Sidebar({ activeConversationId, onSelect, onNew }: SidebarProps)
         </AnimatePresence>
 
         {conversations.length === 0 && (
-          <div className="text-center text-white/30 text-sm mt-8">
-            No conversations yet
-          </div>
+          <div className="text-center text-white/30 text-sm mt-8">No conversations yet</div>
         )}
       </div>
 
       {/* Footer */}
       <div className="p-4 border-t border-white/[0.05]">
-        <div className="text-xs text-white/30 text-center">
-          Hermes Agent v1.0
-        </div>
+        <div className="text-xs text-white/30 text-center">Hermes Agent v1.0</div>
       </div>
     </div>
   );
 
   return (
     <>
-      {/* Mobile Toggle */}
-      <button
-        onClick={() => setIsMobileOpen(true)}
-        className="lg:hidden fixed top-4 left-4 z-50 p-2 bg-white/[0.05] backdrop-blur-xl rounded-lg border border-white/[0.05] text-white/80"
-      >
-        <Menu className="w-5 h-5" />
-      </button>
+      {/* Mobile Toggle - only show when sidebar is closed */}
+      {!isMobileOpen && (
+        <button
+          onClick={() => setIsMobileOpen(true)}
+          className="lg:hidden fixed top-4 left-4 z-50 p-2 bg-white/[0.05] backdrop-blur-xl rounded-lg border border-white/[0.05] text-white/80 hover:text-white transition-colors"
+          aria-label="Open menu"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+      )}
 
       {/* Mobile Overlay */}
       <AnimatePresence>
@@ -138,22 +133,21 @@ export function Sidebar({ activeConversationId, onSelect, onNew }: SidebarProps)
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="lg:hidden fixed inset-0 bg-black/60 z-40"
+            className="lg:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
             onClick={() => setIsMobileOpen(false)}
           />
         )}
       </AnimatePresence>
 
-      {/* Sidebar */}
-      <motion.aside
+      {/* Sidebar Panel */}
+      <aside
         className={cn(
-          "fixed lg:relative z-50 h-full w-72 bg-black/40 backdrop-blur-2xl border-r border-white/[0.05]",
-          "transition-transform duration-200",
+          "fixed lg:relative z-50 h-full w-72 bg-black/80 lg:bg-black/40 backdrop-blur-2xl border-r border-white/[0.05] transition-transform duration-300 ease-out",
           isMobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
       >
         {sidebarContent}
-      </motion.aside>
+      </aside>
     </>
   );
 }
