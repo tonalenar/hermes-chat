@@ -1,7 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import {
+  MessageSquare, Plus, Trash2, Send, Copy, Check, Menu, X,
+  Sparkles, Code, Bug, BookOpen,
+} from "lucide-react";
 
+// Types
 interface Message {
   id: string;
   role: "user" | "assistant";
@@ -12,557 +17,396 @@ interface Conversation {
   id: string;
   title: string;
   messages: Message[];
+  createdAt: number;
 }
 
-const STORAGE_KEY = "hermes-chats";
+// Markdown renderer (no external deps beyond what's in package.json)
+function renderMarkdown(text: string) {
+  const blocks: Array<{ type: "code"; lang: string; content: string } | { type: "text"; content: string }> = [];
+  const codeRegex = /```(\w*)\n([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match;
 
-function loadConversations(): Conversation[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
+  while ((match = codeRegex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      blocks.push({ type: "text", content: text.slice(lastIndex, match.index) });
+    }
+    blocks.push({ type: "code", lang: match[1] || "text", content: match[2] });
+    lastIndex = match.index + match[0].length;
   }
+  if (lastIndex < text.length) {
+    blocks.push({ type: "text", content: text.slice(lastIndex) });
+  }
+
+  return blocks;
 }
 
-function saveConversations(convs: Conversation[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(convs));
+function InlineMarkdown({ text }: { text: string }) {
+  // Process inline markdown
+  const html = text
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.*?)\*/g, "<em>$1</em>")
+    .replace(/`([^`]+)`/g, '<code class="bg-zinc-800 px-1.5 py-0.5 rounded text-sm text-emerald-400">$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-blue-400 underline" target="_blank" rel="noopener">$1</a>')
+    .replace(/^### (.+)$/gm, '<h3 class="text-lg font-semibold mt-4 mb-2">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 class="text-xl font-semibold mt-4 mb-2">$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1 class="text-2xl font-bold mt-4 mb-2">$1</h1>')
+    .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
+    .replace(/^\d+\. (.+)$/gm, '<li class="ml-4 list-decimal">$1</li>')
+    .replace(/\n/g, "<br/>");
+
+  return <span dangerouslySetInnerHTML={{ __html: html }} />;
 }
+
+function CodeBlock({ lang, content }: { lang: string; content: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    navigator.clipboard.writeText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="relative my-3 rounded-lg overflow-hidden bg-zinc-900 border border-zinc-800">
+      <div className="flex items-center justify-between px-4 py-2 bg-zinc-800/50 border-b border-zinc-800">
+        <span className="text-xs text-zinc-400">{lang}</span>
+        <button onClick={copy} className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors">
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre className="p-4 overflow-x-auto text-sm text-zinc-300">
+        <code>{content}</code>
+      </pre>
+    </div>
+  );
+}
+
+function MessageContent({ content }: { content: string }) {
+  const blocks = renderMarkdown(content);
+  return (
+    <div className="prose-invert max-w-none leading-relaxed">
+      {blocks.map((block, i) =>
+        block.type === "code" ? (
+          <CodeBlock key={i} lang={block.lang} content={block.content} />
+        ) : (
+          <InlineMarkdown key={i} text={block.content} />
+        )
+      )}
+    </div>
+  );
+}
+
+// Quick actions
+const quickActions = [
+  { icon: Sparkles, label: "Analyze", prompt: "Analyze this: " },
+  { icon: Code, label: "Create", prompt: "Create: " },
+  { icon: Bug, label: "Debug", prompt: "Debug this issue: " },
+  { icon: BookOpen, label: "Explain", prompt: "Explain: " },
+];
 
 export default function Home() {
-  const [convs, setConvs] = useState<Conversation[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load on mount
+  const activeConversation = conversations.find((c) => c.id === activeId) || null;
+
+  // Load from localStorage
   useEffect(() => {
-    setConvs(loadConversations());
+    const saved = localStorage.getItem("hermes-conversations");
+    if (saved) {
+      const parsed = JSON.parse(saved) as Conversation[];
+      setConversations(parsed);
+      if (parsed.length > 0) setActiveId(parsed[0].id);
+    }
   }, []);
 
-  // Auto-scroll
+  // Save to localStorage
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [convs, activeId, loading]);
+    if (conversations.length > 0) {
+      localStorage.setItem("hermes-conversations", JSON.stringify(conversations));
+    }
+  }, [conversations]);
 
-  const active = convs.find((c) => c.id === activeId) || null;
+  // Auto scroll
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [activeConversation?.messages]);
 
-  const persist = useCallback((next: Conversation[]) => {
-    setConvs(next);
-    saveConversations(next);
-  }, []);
-
-  const newChat = () => {
-    const c: Conversation = { id: crypto.randomUUID(), title: "New Chat", messages: [] };
-    persist([c, ...convs]);
-    setActiveId(c.id);
+  const newChat = useCallback(() => {
+    const id = crypto.randomUUID();
+    const conv: Conversation = { id, title: "New Chat", messages: [], createdAt: Date.now() };
+    setConversations((prev) => [conv, ...prev]);
+    setActiveId(id);
     setSidebarOpen(false);
-    setInput("");
-    textareaRef.current?.focus();
-  };
+  }, []);
 
-  const deleteChat = (id: string) => {
-    const next = convs.filter((c) => c.id !== id);
-    persist(next);
-    if (activeId === id) setActiveId(next[0]?.id ?? null);
-  };
+  const deleteChat = useCallback((id: string) => {
+    setConversations((prev) => {
+      const next = prev.filter((c) => c.id !== id);
+      localStorage.setItem("hermes-conversations", JSON.stringify(next));
+      return next;
+    });
+    if (activeId === id) setActiveId(null);
+  }, [activeId]);
 
-  const send = async () => {
-    const text = input.trim();
-    if (!text || loading) return;
+  const sendMessage = useCallback(async (text?: string) => {
+    const msg = (text || input).trim();
+    if (!msg || isStreaming) return;
 
-    setInput("");
-    if (textareaRef.current) textareaRef.current.style.height = "48px";
-
-    // Ensure conversation exists
-    let targetId = activeId;
-    let currentConvs = [...convs];
-
-    if (!targetId) {
-      const c: Conversation = { id: crypto.randomUUID(), title: "New Chat", messages: [] };
-      currentConvs = [c, ...currentConvs];
-      targetId = c.id;
+    let convId = activeId;
+    if (!convId) {
+      const id = crypto.randomUUID();
+      const conv: Conversation = { id, title: msg.slice(0, 40), messages: [], createdAt: Date.now() };
+      setConversations((prev) => [conv, ...prev]);
+      setActiveId(id);
+      convId = id;
     }
 
-    // Add user message
-    const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: text };
-    currentConvs = currentConvs.map((c) =>
-      c.id === targetId
-        ? {
-            ...c,
-            messages: [...c.messages, userMsg],
-            title: c.messages.length === 0 ? text.slice(0, 40) : c.title,
-          }
-        : c
+    const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: msg };
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (c.id !== convId) return c;
+        const updated = { ...c, messages: [...c.messages, userMsg] };
+        if (c.messages.length === 0) updated.title = msg.slice(0, 40);
+        return updated;
+      })
     );
-    persist(currentConvs);
-    setActiveId(targetId);
-    setLoading(true);
+    setInput("");
+    setIsStreaming(true);
+
+    const assistantId = crypto.randomUUID();
+    // Add empty assistant message for streaming
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === convId
+          ? { ...c, messages: [...c.messages, { id: assistantId, role: "assistant" as const, content: "" }] }
+          : c
+      )
+    );
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text,
-          conversationId: targetId,
-        }),
+        body: JSON.stringify({ message: msg, conversationId: convId }),
       });
 
-      const data = await res.json();
-      const reply = data.response || `Error: ${data.error || "No response"}`;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Request failed");
+      }
 
-      const assistantMsg: Message = { id: crypto.randomUUID(), role: "assistant", content: reply };
-      const updated = loadConversations().map((c) =>
-        c.id === targetId ? { ...c, messages: [...c.messages, assistantMsg] } : c
+      if (res.headers.get("content-type")?.includes("text/event-stream")) {
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") continue;
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.content) {
+                setConversations((prev) =>
+                  prev.map((c) =>
+                    c.id === convId
+                      ? {
+                          ...c,
+                          messages: c.messages.map((m) =>
+                            m.id === assistantId ? { ...m, content: m.content + parsed.content } : m
+                          ),
+                        }
+                      : c
+                  )
+                );
+              }
+            } catch { /* skip */ }
+          }
+        }
+      } else {
+        const data = await res.json();
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === convId
+              ? {
+                  ...c,
+                  messages: c.messages.map((m) =>
+                    m.id === assistantId ? { ...m, content: data.response } : m
+                  ),
+                }
+              : c
+          )
+        );
+      }
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : "An error occurred";
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === convId
+            ? {
+                ...c,
+                messages: c.messages.map((m) =>
+                  m.id === assistantId ? { ...m, content: `Error: ${errMsg}` } : m
+                ),
+              }
+            : c
+        )
       );
-      persist(updated);
-    } catch (err) {
-      const errMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: `Connection error: ${err instanceof Error ? err.message : "Failed to reach server"}`,
-      };
-      const updated = loadConversations().map((c) =>
-        c.id === targetId ? { ...c, messages: [...c.messages, errMsg] } : c
-      );
-      persist(updated);
     } finally {
-      setLoading(false);
+      setIsStreaming(false);
     }
-  };
+  }, [input, isStreaming, activeId]);
 
-  const handleKey = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      send();
+      sendMessage();
     }
-  };
-
-  const adjustHeight = () => {
-    const ta = textareaRef.current;
-    if (!ta) return;
-    ta.style.height = "48px";
-    ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
   };
 
   return (
-    <div style={{ display: "flex", height: "100vh", background: "#0a0a0b", color: "#fff", fontFamily: "system-ui, sans-serif" }}>
-      {/* Mobile menu button */}
-      <button
-        onClick={() => setSidebarOpen(true)}
-        style={{
-          display: "none",
-          position: "fixed",
-          top: 16,
-          left: 16,
-          zIndex: 60,
-          background: "rgba(255,255,255,0.05)",
-          border: "1px solid rgba(255,255,255,0.1)",
-          borderRadius: 8,
-          padding: 8,
-          color: "#fff",
-          cursor: "pointer",
-        }}
-        className="mobile-menu-btn"
-      >
-        ☰
-      </button>
-
-      {/* Sidebar overlay */}
+    <div className="flex h-screen overflow-hidden">
+      {/* Mobile overlay */}
       {sidebarOpen && (
-        <div
-          onClick={() => setSidebarOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.6)",
-            zIndex: 40,
-          }}
-          className="sidebar-overlay"
-        />
+        <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />
       )}
 
       {/* Sidebar */}
-      <aside
-        style={{
-          width: 280,
-          minWidth: 280,
-          background: "rgba(0,0,0,0.4)",
-          borderRight: "1px solid rgba(255,255,255,0.05)",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
-        className={sidebarOpen ? "sidebar open" : "sidebar"}
-      >
-        {/* Header */}
-        <div style={{ padding: 16, borderBottom: "1px solid rgba(255,255,255,0.05)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <div
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 8,
-                background: "linear-gradient(135deg, #8b5cf6, #6366f1)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontWeight: "bold",
-                fontSize: 14,
-              }}
-            >
-              H
-            </div>
-            <span style={{ fontWeight: 500, fontSize: 14, opacity: 0.9 }}>Hermes Chat</span>
-          </div>
-          <button
-            onClick={() => setSidebarOpen(false)}
-            style={{ display: "none", background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 18 }}
-            className="sidebar-close-btn"
-          >
-            ✕
+      <aside className={`fixed md:relative z-50 md:z-auto h-full w-72 bg-zinc-900 border-r border-zinc-800 flex flex-col transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
+        <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
+          <h1 className="text-lg font-semibold text-zinc-100">Hermes Chat</h1>
+          <button onClick={() => setSidebarOpen(false)} className="md:hidden text-zinc-400 hover:text-zinc-200">
+            <X size={20} />
           </button>
         </div>
-
-        {/* New Chat */}
-        <div style={{ padding: 12 }}>
-          <button
-            onClick={newChat}
-            style={{
-              width: "100%",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "10px 12px",
-              background: "rgba(255,255,255,0.05)",
-              border: "1px solid rgba(255,255,255,0.05)",
-              borderRadius: 8,
-              color: "rgba(255,255,255,0.8)",
-              cursor: "pointer",
-              fontSize: 14,
-            }}
-          >
-            <span style={{ fontSize: 18, lineHeight: 1 }}>+</span>
-            New Chat
+        <div className="p-3">
+          <button onClick={newChat} className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium transition-colors">
+            <Plus size={16} /> New Chat
           </button>
         </div>
-
-        {/* Conversations */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 12px 12px" }}>
-          {convs.length === 0 && (
-            <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 13, marginTop: 32 }}>No conversations yet</div>
-          )}
-          {convs.map((c) => (
+        <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
+          {conversations.map((c) => (
             <div
               key={c.id}
-              onClick={() => {
-                setActiveId(c.id);
-                setSidebarOpen(false);
-              }}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "8px 12px",
-                borderRadius: 8,
-                cursor: "pointer",
-                marginBottom: 4,
-                background: activeId === c.id ? "rgba(255,255,255,0.08)" : "transparent",
-                color: activeId === c.id ? "#fff" : "rgba(255,255,255,0.6)",
-                fontSize: 13,
-                transition: "all 0.15s",
-              }}
+              className={`group flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${activeId === c.id ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"}`}
+              onClick={() => { setActiveId(c.id); setSidebarOpen(false); }}
             >
-              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {c.title || "New Chat"}
-              </span>
+              <MessageSquare size={14} className="shrink-0" />
+              <span className="flex-1 text-sm truncate">{c.title}</span>
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteChat(c.id);
-                }}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: "rgba(255,255,255,0.3)",
-                  cursor: "pointer",
-                  padding: 4,
-                  fontSize: 12,
-                  opacity: 0.5,
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
-                onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.5")}
+                onClick={(e) => { e.stopPropagation(); deleteChat(c.id); }}
+                className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 transition-all"
               >
-                🗑
+                <Trash2 size={14} />
               </button>
             </div>
           ))}
         </div>
-
-        {/* Footer */}
-        <div style={{ padding: 16, borderTop: "1px solid rgba(255,255,255,0.05)", textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 12 }}>
-          Hermes Agent v1.0
-        </div>
       </aside>
 
-      {/* Main */}
-      <main style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative", overflow: "hidden" }}>
-        {/* Messages or Empty State */}
-        {active && active.messages.length > 0 ? (
-          <div style={{ flex: 1, overflowY: "auto", padding: "24px 16px" }}>
-            <div style={{ maxWidth: 672, margin: "0 auto" }}>
-              {active.messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  style={{
-                    display: "flex",
-                    gap: 12,
-                    marginBottom: 24,
-                    flexDirection: msg.role === "user" ? "row-reverse" : "row",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: 8,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexShrink: 0,
-                      fontSize: 12,
-                      fontWeight: "bold",
-                      background:
-                        msg.role === "user"
-                          ? "rgba(255,255,255,0.1)"
-                          : "linear-gradient(135deg, #8b5cf6, #6366f1)",
-                    }}
-                  >
-                    {msg.role === "user" ? "U" : "H"}
-                  </div>
-                  <div
-                    style={{
-                      maxWidth: "80%",
-                      padding: "12px 16px",
-                      borderRadius: 16,
-                      fontSize: 14,
-                      lineHeight: 1.6,
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                      background: msg.role === "user" ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.03)",
-                      border: msg.role === "user" ? "none" : "1px solid rgba(255,255,255,0.05)",
-                      color: "rgba(255,255,255,0.85)",
-                    }}
-                  >
-                    {msg.content}
-                  </div>
-                </div>
-              ))}
+      {/* Main content */}
+      <main className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <header className="h-14 border-b border-zinc-800 flex items-center px-4 gap-3 bg-zinc-950/80 backdrop-blur">
+          <button onClick={() => setSidebarOpen(true)} className="md:hidden text-zinc-400 hover:text-zinc-200">
+            <Menu size={20} />
+          </button>
+          <h2 className="text-sm font-medium text-zinc-300 truncate">
+            {activeConversation?.title || "Hermes Chat"}
+          </h2>
+        </header>
 
-              {loading && (
-                <div style={{ display: "flex", gap: 12, marginBottom: 24 }}>
-                  <div
-                    style={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: 8,
-                      background: "linear-gradient(135deg, #8b5cf6, #6366f1)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 12,
-                      fontWeight: "bold",
-                      flexShrink: 0,
-                    }}
-                  >
-                    H
-                  </div>
-                  <div
-                    style={{
-                      padding: "12px 16px",
-                      borderRadius: 16,
-                      background: "rgba(255,255,255,0.03)",
-                      border: "1px solid rgba(255,255,255,0.05)",
-                      color: "rgba(255,255,255,0.5)",
-                      fontSize: 14,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                    }}
-                  >
-                    Thinking
-                    <span className="typing-dots">
-                      <span>●</span>
-                      <span>●</span>
-                      <span>●</span>
-                    </span>
-                  </div>
-                </div>
-              )}
-              <div ref={bottomRef} />
-            </div>
-          </div>
-        ) : (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}>
-            <h1
-              style={{
-                fontSize: 28,
-                fontWeight: 500,
-                background: "linear-gradient(to right, rgba(255,255,255,0.9), rgba(255,255,255,0.4))",
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-                marginBottom: 8,
-              }}
-            >
-              How can I help today?
-            </h1>
-            <p style={{ color: "rgba(255,255,255,0.4)", fontSize: 14 }}>Type a message and press Enter</p>
-          </div>
-        )}
-
-        {/* Input */}
-        <div style={{ padding: "0 16px 24px", position: "relative", zIndex: 10 }}>
-          <div style={{ maxWidth: 672, margin: "0 auto" }}>
-            <div
-              style={{
-                background: "rgba(255,255,255,0.02)",
-                border: "1px solid rgba(255,255,255,0.05)",
-                borderRadius: 16,
-                overflow: "hidden",
-              }}
-            >
-              <div style={{ padding: "16px 16px 8px" }}>
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => {
-                    setInput(e.target.value);
-                    adjustHeight();
-                  }}
-                  onKeyDown={handleKey}
-                  placeholder={active ? "Continue the conversation..." : "Ask Hermes a question..."}
-                  disabled={loading}
-                  rows={1}
-                  style={{
-                    width: "100%",
-                    background: "transparent",
-                    border: "none",
-                    color: "rgba(255,255,255,0.9)",
-                    fontSize: 14,
-                    resize: "none",
-                    outline: "none",
-                    minHeight: 48,
-                    maxHeight: 200,
-                    fontFamily: "inherit",
-                  }}
-                />
+        {/* Messages area */}
+        <div className="flex-1 overflow-y-auto">
+          {!activeConversation || activeConversation.messages.length === 0 ? (
+            /* Empty state */
+            <div className="flex flex-col items-center justify-center h-full px-4">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center mb-6">
+                <Sparkles size={32} className="text-white" />
               </div>
-              <div
-                style={{
-                  padding: "8px 16px 16px",
-                  display: "flex",
-                  justifyContent: "flex-end",
-                }}
-              >
-                <button
-                  onClick={send}
-                  disabled={loading || !input.trim()}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "8px 16px",
-                    borderRadius: 8,
-                    border: "none",
-                    fontSize: 14,
-                    fontWeight: 500,
-                    cursor: loading || !input.trim() ? "not-allowed" : "pointer",
-                    background: input.trim() && !loading ? "#fff" : "rgba(255,255,255,0.05)",
-                    color: input.trim() && !loading ? "#0a0a0b" : "rgba(255,255,255,0.4)",
-                    transition: "all 0.15s",
-                  }}
-                >
-                  {loading ? "⏳" : "↑"} {loading ? "Thinking..." : "Send"}
-                </button>
-              </div>
-            </div>
-
-            {/* Quick actions */}
-            {!loading && (!active || active.messages.length === 0) && (
-              <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8, marginTop: 16 }}>
-                {[
-                  { label: "Analyze", prompt: "Analyze the following and provide insights: " },
-                  { label: "Create", prompt: "Create a detailed plan for: " },
-                  { label: "Debug", prompt: "Debug this issue and find the root cause: " },
-                  { label: "Explain", prompt: "Explain in detail: " },
-                ].map((a) => (
+              <h2 className="text-2xl font-semibold text-zinc-100 mb-2">How can I help?</h2>
+              <p className="text-zinc-400 mb-8 text-center max-w-md">Start a conversation or try one of the quick actions below.</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-lg w-full">
+                {quickActions.map((action) => (
                   <button
-                    key={a.label}
-                    onClick={() => {
-                      setInput(a.prompt);
-                      textareaRef.current?.focus();
-                    }}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      padding: "8px 12px",
-                      background: "rgba(255,255,255,0.03)",
-                      border: "1px solid rgba(255,255,255,0.05)",
-                      borderRadius: 8,
-                      color: "rgba(255,255,255,0.5)",
-                      cursor: "pointer",
-                      fontSize: 13,
-                      transition: "all 0.15s",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = "rgba(255,255,255,0.07)";
-                      e.currentTarget.style.color = "rgba(255,255,255,0.9)";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = "rgba(255,255,255,0.03)";
-                      e.currentTarget.style.color = "rgba(255,255,255,0.5)";
-                    }}
+                    key={action.label}
+                    onClick={() => { setInput(action.prompt); textareaRef.current?.focus(); }}
+                    className="flex flex-col items-center gap-2 p-4 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/50 transition-all text-zinc-300 hover:text-zinc-100"
                   >
-                    {a.label}
+                    <action.icon size={20} />
+                    <span className="text-xs font-medium">{action.label}</span>
                   </button>
                 ))}
               </div>
-            )}
+            </div>
+          ) : (
+            /* Messages */
+            <div className="max-w-3xl mx-auto w-full px-4 py-6 space-y-6">
+              {activeConversation.messages.map((msg) => (
+                <div key={msg.id} className={`flex gap-3 ${msg.role === "user" ? "justify-end" : ""}`}>
+                  {msg.role === "assistant" && (
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center shrink-0 mt-1">
+                      <Sparkles size={14} className="text-white" />
+                    </div>
+                  )}
+                  <div className={`max-w-[85%] ${msg.role === "user" ? "bg-zinc-800 rounded-2xl rounded-br-md px-4 py-3 text-zinc-100" : "text-zinc-200"}`}>
+                    {msg.role === "user" ? (
+                      <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+                    ) : msg.content ? (
+                      <MessageContent content={msg.content} />
+                    ) : (
+                      <div className="flex items-center gap-1.5 py-2">
+                        <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                        <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse [animation-delay:0.2s]" />
+                        <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse [animation-delay:0.4s]" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </div>
+
+        {/* Input area */}
+        <div className="border-t border-zinc-800 p-4 bg-zinc-950/80 backdrop-blur">
+          <div className="max-w-3xl mx-auto relative">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Message Hermes..."
+              rows={1}
+              className="w-full resize-none rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3 pr-12 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all max-h-40 overflow-y-auto"
+            />
+            <button
+              onClick={() => sendMessage()}
+              disabled={!input.trim() || isStreaming}
+              className="absolute right-3 bottom-3 p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:hover:bg-emerald-600 transition-colors text-white"
+            >
+              <Send size={16} />
+            </button>
           </div>
+          <p className="text-center text-xs text-zinc-600 mt-2">Hermes can make mistakes. Verify important information.</p>
         </div>
       </main>
-
-      <style>{`
-        @media (max-width: 1023px) {
-          .mobile-menu-btn { display: block !important; }
-          .sidebar { position: fixed; z-index: 50; height: 100%; transform: translateX(-100%); transition: transform 0.3s ease; }
-          .sidebar.open { transform: translateX(0); }
-          .sidebar-close-btn { display: block !important; }
-        }
-        @media (min-width: 1024px) {
-          .sidebar-overlay { display: none !important; }
-        }
-        @keyframes blink {
-          0%, 100% { opacity: 0.3; }
-          50% { opacity: 1; }
-        }
-        .typing-dots span {
-          display: inline-block;
-          margin: 0 2px;
-          animation: blink 1.4s infinite;
-          font-size: 8px;
-        }
-        .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
-        .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
-      `}</style>
     </div>
   );
 }
