@@ -140,19 +140,18 @@ export default function Home() {
         const { data, error } = await supabase
           .from("conversations")
           .select("*")
-          .order("created_at", { ascending: false })
+          .order("updated_at", { ascending: false })
           .limit(50);
 
         if (error) throw error;
         if (data && data.length > 0) {
           const convs: Conversation[] = data.map((c: any) => ({
             id: c.id,
-            title: c.title,
+            title: c.title || "New Chat",
             messages: [],
             createdAt: new Date(c.created_at).getTime(),
           }));
           setConversations(convs);
-          setActiveId(convs[0].id);
         }
       } catch (e) {
         console.error("Error loading conversations:", e);
@@ -160,6 +159,34 @@ export default function Home() {
     }
     loadFromSupabase();
   }, []);
+
+  // Load messages when active conversation changes
+  useEffect(() => {
+    if (!activeId) return;
+    const conv = conversations.find((c) => c.id === activeId);
+    if (!conv || conv.messages.length > 0) return;
+
+    async function loadMessages() {
+      try {
+        const res = await fetch(`/api/conversations/${activeId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const msgs: Message[] = (data.messages || []).map((m: any) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+        }));
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === activeId ? { ...c, messages: msgs } : c
+          )
+        );
+      } catch (e) {
+        console.error("Error loading messages:", e);
+      }
+    }
+    loadMessages();
+  }, [activeId, conversations]);
 
   // Auto scroll
   useEffect(() => {
@@ -217,7 +244,6 @@ export default function Home() {
       setActiveId(id);
       convId = id;
     }
-
     const displayContent = msg || (filesToSend.length > 0 ? `[Arquivo(s) enviado(s): ${filesToSend.map(f => f.name).join(", ")}]` : "");
     const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: displayContent };
     setConversations((prev) =>
@@ -230,6 +256,17 @@ export default function Home() {
     );
     setInput("");
     setIsStreaming(true);
+
+    // Update title in Supabase if this is a new conversation
+    const isNewConv = !conversations.find((c) => c.id === convId);
+    if (isNewConv || conversations.find((c) => c.id === convId)?.title === "New Chat") {
+      const newTitle = msg.slice(0, 40) || (filesToSend.length > 0 ? `Arquivo(s) (${filesToSend.length})` : "New Chat");
+      fetch(`/api/conversations/${convId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: newTitle, model: selectedModel }),
+      }).catch((e) => console.error("Title save error:", e));
+    }
 
     const assistantId = crypto.randomUUID();
     setConversations((prev) =>
