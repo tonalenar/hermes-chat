@@ -111,6 +111,8 @@ export async function POST(req: NextRequest) {
     let conversationId: string | undefined;
     let clientMessages: any[] | undefined;
     let model: string = MODEL; // Use env default, or override from request
+    let temperature: number | undefined;
+    let systemInstructions: string | undefined;
 
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
@@ -118,6 +120,9 @@ export async function POST(req: NextRequest) {
       conversationId = formData.get("conversationId") as string | undefined;
       const modelFromForm = formData.get("model") as string | undefined;
       if (modelFromForm) model = modelFromForm;
+      const tempFromForm = formData.get("temperature") as string | undefined;
+      if (tempFromForm) temperature = parseFloat(tempFromForm);
+      systemInstructions = formData.get("systemInstructions") as string | undefined;
       const messagesStr = formData.get("messages") as string | undefined;
       if (messagesStr) {
         try {
@@ -133,6 +138,8 @@ export async function POST(req: NextRequest) {
       conversationId = body.conversationId;
       clientMessages = body.messages;
       if (body.model) model = body.model;
+      if (body.temperature !== undefined) temperature = body.temperature;
+      if (body.systemInstructions) systemInstructions = body.systemInstructions;
     }
 
     if (!message && files.length === 0) {
@@ -193,17 +200,22 @@ export async function POST(req: NextRequest) {
       saveToSupabase(conversationId, "user", userContentStr, model);
     }
 
+    const openAiBody: Record<string, unknown> = {
+      model: model,
+      messages,
+      stream: true,
+    };
+    if (temperature !== undefined) {
+      openAiBody.temperature = temperature;
+    }
+
     const response = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${API_KEY}`,
       },
-      body: JSON.stringify({
-        model: model,
-        messages,
-        stream: true,
-      }),
+      body: JSON.stringify(openAiBody),
     });
 
     if (!response.ok) {

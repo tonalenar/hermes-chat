@@ -8,6 +8,7 @@ import {
   Settings, Search, LogIn, LogOut, User, Sliders,
 } from "lucide-react";
 import { useSupabase } from "@/lib/supabase-context";
+import clsx from "clsx";
 
 // Types
 interface Message {
@@ -191,6 +192,9 @@ export default function Home() {
 
   const activeConversation = conversations.find((c) => c.id === activeId) || null;
 
+  // Theme helper
+  const theme = settings.theme;
+
   // Apply theme
   useEffect(() => {
     const root = document.documentElement;
@@ -227,7 +231,9 @@ export default function Home() {
   useEffect(() => {
     async function loadFromSupabase() {
       try {
-        const res = await fetch("/api/conversations?limit=50");
+        const params = new URLSearchParams({ limit: "50" });
+        if (user?.id) params.set("user_id", user.id);
+        const res = await fetch(`/api/conversations?${params}`);
         if (!res.ok) return;
         const data = await res.json();
         if (data.conversations && data.conversations.length > 0) {
@@ -244,7 +250,7 @@ export default function Home() {
       }
     }
     loadFromSupabase();
-  }, []);
+  }, [user?.id]);  // Re-load when user changes
 
   // Load messages when active conversation changes
   useEffect(() => {
@@ -420,10 +426,12 @@ export default function Home() {
     const isNewConv = !conversations.find((c) => c.id === convId);
     if (isNewConv || conversations.find((c) => c.id === convId)?.title === "New Chat") {
       const newTitle = msg.slice(0, 40) || (filesToSend.length > 0 ? `Arquivo(s) (${filesToSend.length})` : "New Chat");
+      const patchBody: Record<string, unknown> = { title: newTitle, model: selectedModel };
+      if (user?.id) patchBody.user_id = user.id;
       fetch(`/api/conversations/${convId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: newTitle, model: selectedModel }),
+        body: JSON.stringify(patchBody),
       }).catch((e) => console.error("Title save error:", e));
     }
 
@@ -561,7 +569,7 @@ export default function Home() {
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
-  }, [input, isStreaming, activeId, activeConversation?.messages, files, selectedModel, settings.systemInstructions, settings.temperature]);
+  }, [input, isStreaming, activeId, activeConversation?.messages, files, selectedModel, settings.systemInstructions, settings.temperature, user?.id]);
 
   // Regenerate: remove last assistant message and resend last user message
   const regenerate = useCallback(() => {
@@ -598,8 +606,6 @@ export default function Home() {
     } else {
       // Just re-trigger with the same text
       setTimeout(() => {
-        const filesToSend: File[] = [];
-        // Use display content for the API
         sendMessage(lastUserContent);
       }, 0);
     }
@@ -723,17 +729,33 @@ export default function Home() {
   }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-zinc-950 text-zinc-100">
+    <div className={clsx(
+      "flex h-screen overflow-hidden",
+      theme === 'light' ? 'bg-gray-50 text-gray-900' : 'bg-zinc-950 text-zinc-100'
+    )}>
       {/* Overlay for mobile sidebar */}
       {sidebarOpen && (
         <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />
       )}
 
       {/* Sidebar */}
-      <aside className={`fixed md:relative z-50 md:z-auto h-full w-72 bg-zinc-900 border-r border-zinc-800 flex flex-col transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
-        <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
-          <h1 className="text-lg font-semibold text-zinc-100">Hermes Chat</h1>
-          <button onClick={() => setSidebarOpen(false)} className="md:hidden text-zinc-400 hover:text-zinc-200">
+      <aside className={clsx(
+        "fixed md:relative z-50 md:z-auto h-full w-72 border-r flex flex-col transition-transform duration-200",
+        sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+        theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
+      )}>
+        <div className={clsx(
+          "p-4 border-b flex items-center justify-between",
+          theme === 'light' ? 'border-gray-200' : 'border-zinc-800'
+        )}>
+          <h1 className={clsx(
+            "text-lg font-semibold",
+            theme === 'light' ? 'text-gray-900' : 'text-zinc-100'
+          )}>Hermes Chat</h1>
+          <button onClick={() => setSidebarOpen(false)} className={clsx(
+            "md:hidden",
+            theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
+          )}>
             <X size={20} />
           </button>
         </div>
@@ -741,19 +763,30 @@ export default function Home() {
         {/* Search */}
         <div className="px-3 pt-3">
           <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+            <Search size={14} className={clsx(
+              "absolute left-3 top-1/2 -translate-y-1/2",
+              theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+            )} />
             <input
               ref={sidebarSearchRef}
               type="text"
               value={sidebarSearch}
               onChange={(e) => setSidebarSearch(e.target.value)}
               placeholder="Search conversations..."
-              className="w-full pl-8 pr-3 py-2 rounded-lg bg-zinc-800 border border-zinc-700 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50"
+              className={clsx(
+                "w-full pl-8 pr-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50",
+                theme === 'light'
+                  ? 'bg-gray-100 border border-gray-300 text-gray-800 placeholder-gray-400'
+                  : 'bg-zinc-800 border border-zinc-700 text-zinc-200 placeholder-zinc-500'
+              )}
             />
             {sidebarSearch && (
               <button
                 onClick={() => setSidebarSearch("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                className={clsx(
+                  "absolute right-2 top-1/2 -translate-y-1/2",
+                  theme === 'light' ? 'text-gray-400 hover:text-gray-600' : 'text-zinc-500 hover:text-zinc-300'
+                )}
               >
                 <X size={14} />
               </button>
@@ -763,7 +796,12 @@ export default function Home() {
 
         {/* New Chat */}
         <div className="p-3">
-          <button onClick={newChat} className="w-full flex items-center gap-2 px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium transition-colors">
+          <button onClick={newChat} className={clsx(
+            "w-full flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors",
+            theme === 'light'
+              ? 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+          )}>
             <Plus size={16} /> New Chat
           </button>
         </div>
@@ -771,12 +809,20 @@ export default function Home() {
         {/* Conversation List */}
         <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
           {filteredConversations.length === 0 && sidebarSearch.trim() ? (
-            <p className="text-center text-zinc-500 text-sm py-4">No conversations found</p>
+            <p className={clsx(
+              "text-center text-sm py-4",
+              theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+            )}>No conversations found</p>
           ) : (
             filteredConversations.map((c) => (
               <div
                 key={c.id}
-                className={`group flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${activeId === c.id ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"}`}
+                className={clsx(
+                  "group flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition-colors",
+                  activeId === c.id
+                    ? theme === 'light' ? 'bg-gray-100 text-gray-900' : 'bg-zinc-800 text-zinc-100'
+                    : theme === 'light' ? 'text-gray-500 hover:bg-gray-50 hover:text-gray-700' : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
+                )}
                 onClick={() => { setActiveId(c.id); setSidebarOpen(false); }}
               >
                 <MessageSquare size={14} className="shrink-0" />
@@ -787,19 +833,26 @@ export default function Home() {
                       value={titleInput}
                       onChange={(e) => setTitleInput(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") saveRename(c.id); if (e.key === "Escape") setEditingTitle(null); }}
-                      className="flex-1 min-w-0 bg-zinc-700 border border-zinc-600 rounded px-1.5 py-0.5 text-sm text-zinc-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      className={clsx(
+                        "flex-1 min-w-0 border rounded px-1.5 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500",
+                        theme === 'light'
+                          ? 'bg-gray-200 border-gray-400 text-gray-800'
+                          : 'bg-zinc-700 border-zinc-600 text-zinc-200'
+                      )}
                     />
                     <button onClick={() => saveRename(c.id)} className="text-emerald-400 hover:text-emerald-300 p-0.5">
                       <Check size={12} />
                     </button>
-                    <button onClick={() => setEditingTitle(null)} className="text-zinc-400 hover:text-zinc-300 p-0.5">
+                    <button onClick={() => setEditingTitle(null)} className={clsx(
+                      "p-0.5",
+                      theme === 'light' ? 'text-gray-400 hover:text-gray-600' : 'text-zinc-400 hover:text-zinc-300'
+                    )}>
                       <X size={12} />
                     </button>
                   </div>
                 ) : (
                   <span
                     className="flex-1 text-sm truncate"
-                    onDoubleClick={(e) => { e.stopPropagation(); startRename(c.id, c.title); }}
                     onClick={() => { setActiveId(c.id); setSidebarOpen(false); }}
                   >
                     {c.title}
@@ -809,14 +862,20 @@ export default function Home() {
                   <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
                     <button
                       onClick={(e) => { e.stopPropagation(); startRename(c.id, c.title); }}
-                      className="text-zinc-500 hover:text-zinc-300 p-1"
+                      className={clsx(
+                        "p-1",
+                        theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-500 hover:text-zinc-300'
+                      )}
                       title="Rename"
                     >
                       <Pencil size={12} />
                     </button>
                     <button
                       onClick={async (e) => { e.stopPropagation(); if (window.confirm("Delete this conversation?")) deleteChat(c.id); }}
-                      className="text-zinc-500 hover:text-red-400 p-1"
+                      className={clsx(
+                        "p-1",
+                        theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
+                      )}
                       title="Delete"
                     >
                       <Trash2 size={12} />
@@ -832,8 +891,16 @@ export default function Home() {
       {/* Main */}
       <main className="flex-1 flex flex-col min-w-0">
         {/* Header */}
-        <header className="h-14 border-b border-zinc-800 flex items-center px-4 gap-3 bg-zinc-950/80 backdrop-blur">
-          <button onClick={() => setSidebarOpen(true)} className="md:hidden text-zinc-400 hover:text-zinc-200">
+        <header className={clsx(
+          "h-14 border-b flex items-center px-4 gap-3 backdrop-blur",
+          theme === 'light'
+            ? 'border-gray-200 bg-white/80'
+            : 'border-zinc-800 bg-zinc-950/80'
+        )}>
+          <button onClick={() => setSidebarOpen(true)} className={clsx(
+            "md:hidden",
+            theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
+          )}>
             <Menu size={20} />
           </button>
 
@@ -841,7 +908,12 @@ export default function Home() {
           <div className="relative">
             <button
               onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm transition-colors"
+              className={clsx(
+                "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors",
+                theme === 'light'
+                  ? 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                  : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+              )}
             >
               <Bot size={14} className="text-emerald-400" />
               <span className="hidden sm:inline">{availableModels.find(m => m.id === selectedModel)?.name || selectedModel}</span>
@@ -851,18 +923,32 @@ export default function Home() {
             {modelDropdownOpen && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setModelDropdownOpen(false)} />
-                <div className="absolute top-full left-0 mt-1 w-64 bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl z-50 py-1 max-h-80 overflow-y-auto">
+                <div className={clsx(
+                  "absolute top-full left-0 mt-1 w-64 border rounded-lg shadow-xl z-50 py-1 max-h-80 overflow-y-auto",
+                  theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
+                )}>
                   {availableModels.map((model) => (
                     <button
                       key={model.id}
                       onClick={() => { setSelectedModel(model.id); setModelDropdownOpen(false); }}
-                      className={`w-full text-left px-4 py-2.5 hover:bg-zinc-800 transition-colors ${selectedModel === model.id ? 'bg-zinc-800' : ''}`}
+                      className={clsx(
+                        "w-full text-left px-4 py-2.5 transition-colors",
+                        selectedModel === model.id
+                          ? theme === 'light' ? 'bg-gray-100' : 'bg-zinc-800'
+                          : theme === 'light' ? 'hover:bg-gray-50' : 'hover:bg-zinc-800'
+                      )}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium text-zinc-200">{model.name}</span>
+                        <span className={clsx(
+                          "text-sm font-medium",
+                          theme === 'light' ? 'text-gray-800' : 'text-zinc-200'
+                        )}>{model.name}</span>
                         {selectedModel === model.id && <Check size={14} className="text-emerald-400" />}
                       </div>
-                      <span className="text-xs text-zinc-500">{model.desc}</span>
+                      <span className={clsx(
+                        "text-xs",
+                        theme === 'light' ? 'text-gray-500' : 'text-zinc-500'
+                      )}>{model.desc}</span>
                     </button>
                   ))}
                 </div>
@@ -870,7 +956,10 @@ export default function Home() {
             )}
           </div>
 
-          <h2 className="text-sm font-medium text-zinc-300 truncate flex-1">
+          <h2 className={clsx(
+            "text-sm font-medium truncate flex-1",
+            theme === 'light' ? 'text-gray-600' : 'text-zinc-300'
+          )}>
             {activeConversation?.title || "Hermes Chat"}
           </h2>
 
@@ -879,24 +968,39 @@ export default function Home() {
             <div className="relative">
               <button
                 onClick={() => setExportDropdownOpen(!exportDropdownOpen)}
-                className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors text-sm"
+                className={clsx(
+                  "flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-sm transition-colors",
+                  theme === 'light'
+                    ? 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                )}
                 title="Export"
               >
                 <Download size={16} />
+                <span className="hidden sm:inline text-xs">Export</span>
               </button>
               {exportDropdownOpen && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setExportDropdownOpen(false)} />
-                  <div className="absolute right-0 top-full mt-1 w-48 bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl z-50 py-1">
+                  <div className={clsx(
+                    "absolute right-0 top-full mt-1 w-48 border rounded-lg shadow-xl z-50 py-1",
+                    theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
+                  )}>
                     <button
                       onClick={exportAsJSON}
-                      className="w-full text-left px-4 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors"
+                      className={clsx(
+                        "w-full text-left px-4 py-2.5 text-sm transition-colors",
+                        theme === 'light' ? 'text-gray-700 hover:bg-gray-50' : 'text-zinc-300 hover:bg-zinc-800'
+                      )}
                     >
                       Export as JSON
                     </button>
                     <button
                       onClick={exportAsMarkdown}
-                      className="w-full text-left px-4 py-2.5 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors"
+                      className={clsx(
+                        "w-full text-left px-4 py-2.5 text-sm transition-colors",
+                        theme === 'light' ? 'text-gray-700 hover:bg-gray-50' : 'text-zinc-300 hover:bg-zinc-800'
+                      )}
                     >
                       Export as Markdown
                     </button>
@@ -909,7 +1013,12 @@ export default function Home() {
           {/* Settings button */}
           <button
             onClick={() => setSettingsOpen(true)}
-            className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors text-sm"
+            className={clsx(
+              "flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-sm transition-colors",
+              theme === 'light'
+                ? 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+            )}
             title="Settings"
           >
             <Settings size={16} />
@@ -917,7 +1026,10 @@ export default function Home() {
 
           {/* Auth */}
           {authLoading ? (
-            <div className="w-8 h-8 rounded-full bg-zinc-800 animate-pulse" />
+            <div className={clsx(
+              "w-8 h-8 rounded-full animate-pulse",
+              theme === 'light' ? 'bg-gray-200' : 'bg-zinc-800'
+            )} />
           ) : user ? (
             <div className="flex items-center gap-2">
               {user.user_metadata?.avatar_url ? (
@@ -927,13 +1039,19 @@ export default function Home() {
                   className="w-7 h-7 rounded-full"
                 />
               ) : (
-                <div className="w-7 h-7 rounded-full bg-zinc-700 flex items-center justify-center">
-                  <User size={14} className="text-zinc-400" />
+                <div className={clsx(
+                  "w-7 h-7 rounded-full flex items-center justify-center",
+                  theme === 'light' ? 'bg-gray-200 text-gray-500' : 'bg-zinc-700 text-zinc-400'
+                )}>
+                  <User size={14} />
                 </div>
               )}
               <button
                 onClick={signOut}
-                className="text-zinc-400 hover:text-zinc-200 transition-colors"
+                className={clsx(
+                  "transition-colors",
+                  theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
+                )}
                 title="Logout"
               >
                 <LogOut size={16} />
@@ -942,9 +1060,14 @@ export default function Home() {
           ) : (
             <button
               onClick={signInWithGithub}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm transition-colors"
+              className={clsx(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors",
+                theme === 'light'
+                  ? 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                  : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+              )}
             >
-              <LogIn size={14} />
+              <User size={14} />
               <span className="hidden sm:inline">Login</span>
             </button>
           )}
@@ -957,14 +1080,25 @@ export default function Home() {
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center mb-6">
                 <Sparkles size={32} className="text-white" />
               </div>
-              <h2 className="text-2xl font-semibold text-zinc-100 mb-2">How can I help?</h2>
-              <p className="text-zinc-400 mb-8 text-center max-w-md">Start a conversation or try one of the quick actions below.</p>
+              <h2 className={clsx(
+                "text-2xl font-semibold mb-2",
+                theme === 'light' ? 'text-gray-800' : 'text-zinc-100'
+              )}>How can I help?</h2>
+              <p className={clsx(
+                "mb-8 text-center max-w-md",
+                theme === 'light' ? 'text-gray-500' : 'text-zinc-400'
+              )}>Start a conversation or try one of the quick actions below.</p>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-lg w-full">
                 {quickActions.map((action) => (
                   <button
                     key={action.label}
                     onClick={() => { setInput(action.prompt); textareaRef.current?.focus(); }}
-                    className="flex flex-col items-center gap-2 p-4 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/50 transition-all text-zinc-300 hover:text-zinc-100"
+                    className={clsx(
+                      "flex flex-col items-center gap-2 p-4 rounded-xl border transition-all",
+                      theme === 'light'
+                        ? 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50 text-gray-600 hover:text-gray-900'
+                        : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/50 text-zinc-300 hover:text-zinc-100'
+                    )}
                   >
                     <action.icon size={20} />
                     <span className="text-xs font-medium">{action.label}</span>
@@ -981,7 +1115,14 @@ export default function Home() {
                       <Sparkles size={14} className="text-white" />
                     </div>
                   )}
-                  <div className={`max-w-[85%] ${msg.role === "user" ? "bg-zinc-800 rounded-2xl rounded-br-md px-4 py-3 text-zinc-100" : "text-zinc-200"}`}>
+                  <div className={clsx(
+                    "max-w-[85%]",
+                    msg.role === "user"
+                      ? theme === 'light'
+                        ? 'bg-emerald-50 rounded-2xl rounded-br-md px-4 py-3 text-gray-800'
+                        : 'bg-zinc-800 rounded-2xl rounded-br-md px-4 py-3 text-zinc-100'
+                      : theme === 'light' ? 'text-gray-800' : 'text-zinc-200'
+                  )}>
                     {editingMessageId === msg.id ? (
                       <div className="flex flex-col gap-2">
                         <textarea
@@ -995,7 +1136,12 @@ export default function Home() {
                             }
                             if (e.key === "Escape") cancelEditMessage();
                           }}
-                          className="w-full resize-none rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                          className={clsx(
+                            "w-full resize-none rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50",
+                            theme === 'light'
+                              ? 'bg-white border-gray-300 text-gray-800'
+                              : 'bg-zinc-900 border-zinc-700 text-zinc-100'
+                          )}
                           rows={4}
                         />
                         <div className="flex gap-2 justify-end">
@@ -1007,7 +1153,12 @@ export default function Home() {
                           </button>
                           <button
                             onClick={cancelEditMessage}
-                            className="flex items-center gap-1 px-3 py-1 rounded-md bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-xs"
+                            className={clsx(
+                              "flex items-center gap-1 px-3 py-1 rounded-md text-xs",
+                              theme === 'light'
+                                ? 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+                            )}
                           >
                             <X size={12} /> Cancel
                           </button>
@@ -1020,14 +1171,20 @@ export default function Home() {
                         <div className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                           <button
                             onClick={() => startEditMessage(msg)}
-                            className="text-zinc-500 hover:text-zinc-300 p-1"
+                            className={clsx(
+                              "p-1",
+                              theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-500 hover:text-zinc-300'
+                            )}
                             title="Edit message"
                           >
                             <Pencil size={12} />
                           </button>
                           <button
                             onClick={() => deleteMessage(msg.id)}
-                            className="text-zinc-500 hover:text-red-400 p-1"
+                            className={clsx(
+                              "p-1",
+                              theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
+                            )}
                             title="Delete message"
                           >
                             <Trash2 size={12} />
@@ -1042,7 +1199,12 @@ export default function Home() {
                           {idx === activeConversation.messages.length - 1 && (
                             <button
                               onClick={regenerate}
-                              className="flex items-center gap-1 px-2 py-1 rounded-md text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 text-xs transition-colors"
+                              className={clsx(
+                                "flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors",
+                                theme === 'light'
+                                  ? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'
+                                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                              )}
                               title="Regenerate"
                             >
                               <RotateCcw size={12} /> Regenerate
@@ -1050,7 +1212,10 @@ export default function Home() {
                           )}
                           <button
                             onClick={() => deleteMessage(msg.id)}
-                            className="text-zinc-500 hover:text-red-400 p-1"
+                            className={clsx(
+                              "p-1",
+                              theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
+                            )}
                             title="Delete message"
                           >
                             <Trash2 size={12} />
@@ -1067,7 +1232,11 @@ export default function Home() {
 
                     {/* Timestamp */}
                     {msg.createdAt && (
-                      <div className={`text-xs text-zinc-500 mt-1 ${editingMessageId === msg.id ? "hidden" : ""}`}>
+                      <div className={clsx(
+                        "text-xs mt-1",
+                        editingMessageId === msg.id ? "hidden" : "",
+                        theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+                      )}>
                         {formatRelativeTime(new Date(msg.createdAt))}
                       </div>
                     )}
@@ -1080,7 +1249,12 @@ export default function Home() {
         </div>
 
         {/* Input Area */}
-        <div className="border-t border-zinc-800 p-4 bg-zinc-950/80 backdrop-blur">
+        <div className={clsx(
+          "border-t p-4 backdrop-blur",
+          theme === 'light'
+            ? 'border-gray-200 bg-white/80'
+            : 'border-zinc-800 bg-zinc-950/80'
+        )}>
           <div className="max-w-3xl mx-auto relative">
             {/* File previews */}
             {files.length > 0 && (
@@ -1091,7 +1265,10 @@ export default function Home() {
                   return (
                     <div key={i} className="relative group/file">
                       {isImage && previewUrl ? (
-                        <div className="relative rounded-lg overflow-hidden border border-zinc-700">
+                        <div className={clsx(
+                          "relative rounded-lg overflow-hidden border",
+                          theme === 'light' ? 'border-gray-300' : 'border-zinc-700'
+                        )}>
                           <img
                             src={previewUrl}
                             alt={file.name}
@@ -1106,10 +1283,17 @@ export default function Home() {
                           </button>
                         </div>
                       ) : (
-                        <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-800 text-zinc-300 text-xs">
+                        <div className={clsx(
+                          "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs",
+                          theme === 'light'
+                            ? 'bg-gray-100 text-gray-600'
+                            : 'bg-zinc-800 text-zinc-300'
+                        )}>
                           {getFileIcon(file)}
                           <span className="max-w-[120px] truncate">{file.name}</span>
-                          <button onClick={() => removeFile(i)} className="text-zinc-500 hover:text-red-400">
+                          <button onClick={() => removeFile(i)} className={clsx(
+                            theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
+                          )}>
                             <X size={12} />
                           </button>
                         </div>
@@ -1127,12 +1311,22 @@ export default function Home() {
               onKeyDown={handleKeyDown}
               placeholder="Message Hermes..."
               rows={1}
-              className="w-full resize-none rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3 pr-28 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all max-h-40 overflow-y-auto"
+              className={clsx(
+                "w-full resize-none rounded-xl border px-4 py-3 pr-28 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all max-h-40 overflow-y-auto",
+                theme === 'light'
+                  ? 'bg-white border-gray-300 text-gray-800 placeholder-gray-400'
+                  : 'bg-zinc-900 border-zinc-800 text-zinc-100 placeholder-zinc-500'
+              )}
             />
             <div className="absolute right-3 bottom-3 flex items-center gap-1">
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+                className={clsx(
+                  "p-1.5 rounded-lg transition-colors",
+                  theme === 'light'
+                    ? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'
+                    : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                )}
                 title="Attach files"
               >
                 <Paperclip size={16} />
@@ -1157,7 +1351,10 @@ export default function Home() {
               )}
             </div>
           </div>
-          <p className="text-center text-xs text-zinc-600 mt-2">Hermes can make mistakes. Verify important information.</p>
+          <p className={clsx(
+            "text-center text-xs mt-2",
+            theme === 'light' ? 'text-gray-400' : 'text-zinc-600'
+          )}>Hermes can make mistakes. Verify important information.</p>
         </div>
       </main>
 
@@ -1199,16 +1396,25 @@ export default function Home() {
           onClick={() => setSettingsOpen(false)}
         >
           <div
-            className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl"
+            className={clsx(
+              "w-full max-w-md border rounded-2xl p-6 shadow-2xl",
+              theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
+            )}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
+              <h2 className={clsx(
+                "text-lg font-semibold flex items-center gap-2",
+                theme === 'light' ? 'text-gray-900' : 'text-zinc-100'
+              )}>
                 <Settings size={18} /> Settings
               </h2>
               <button
                 onClick={() => setSettingsOpen(false)}
-                className="text-zinc-400 hover:text-zinc-200 p-1"
+                className={clsx(
+                  "p-1",
+                  theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
+                )}
               >
                 <X size={18} />
               </button>
@@ -1216,17 +1422,38 @@ export default function Home() {
 
             {/* Theme Toggle */}
             <div className="mb-5">
-              <label className="text-sm font-medium text-zinc-300 mb-2 block">Theme</label>
+              <label className={clsx(
+                "text-sm font-medium mb-2 block",
+                theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
+              )}>Theme</label>
               <div className="flex gap-2">
                 <button
                   onClick={() => setSettings((s) => ({ ...s, theme: "dark" }))}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm transition-colors ${settings.theme === "dark" ? "bg-zinc-700 text-zinc-100 ring-1 ring-emerald-500" : "bg-zinc-800 text-zinc-400 hover:text-zinc-300"}`}
+                  className={clsx(
+                    "flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm transition-colors",
+                    settings.theme === "dark"
+                      ? theme === 'light'
+                        ? 'bg-gray-200 text-gray-800 ring-1 ring-emerald-500'
+                        : 'bg-zinc-700 text-zinc-100 ring-1 ring-emerald-500'
+                      : theme === 'light'
+                        ? 'bg-gray-100 text-gray-400 hover:text-gray-600'
+                        : 'bg-zinc-800 text-zinc-400 hover:text-zinc-300'
+                  )}
                 >
                   <Moon size={16} /> Dark
                 </button>
                 <button
                   onClick={() => setSettings((s) => ({ ...s, theme: "light" }))}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm transition-colors ${settings.theme === "light" ? "bg-zinc-700 text-zinc-100 ring-1 ring-emerald-500" : "bg-zinc-800 text-zinc-400 hover:text-zinc-300"}`}
+                  className={clsx(
+                    "flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm transition-colors",
+                    settings.theme === "light"
+                      ? theme === 'light'
+                        ? 'bg-gray-200 text-gray-800 ring-1 ring-emerald-500'
+                        : 'bg-zinc-700 text-zinc-100 ring-1 ring-emerald-500'
+                      : theme === 'light'
+                        ? 'bg-gray-100 text-gray-400 hover:text-gray-600'
+                        : 'bg-zinc-800 text-zinc-400 hover:text-zinc-300'
+                  )}
                 >
                   <Sun size={16} /> Light
                 </button>
@@ -1235,7 +1462,10 @@ export default function Home() {
 
             {/* Temperature Slider */}
             <div className="mb-5">
-              <label className="text-sm font-medium text-zinc-300 mb-2 flex items-center gap-2">
+              <label className={clsx(
+                "text-sm font-medium mb-2 flex items-center gap-2",
+                theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
+              )}>
                 <Sliders size={14} /> Temperature: {settings.temperature.toFixed(1)}
               </label>
               <input
@@ -1245,23 +1475,78 @@ export default function Home() {
                 step="0.1"
                 value={settings.temperature}
                 onChange={(e) => setSettings((s) => ({ ...s, temperature: parseFloat(e.target.value) }))}
-                className="w-full h-2 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                className={clsx(
+                  "w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-500",
+                  theme === 'light' ? 'bg-gray-200' : 'bg-zinc-700'
+                )}
               />
-              <div className="flex justify-between text-xs text-zinc-500 mt-1">
+              <div className={clsx(
+                "flex justify-between text-xs mt-1",
+                theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+              )}>
                 <span>Precise (0)</span>
                 <span>Creative (1)</span>
               </div>
             </div>
 
+            {/* Model Selector */}
+            <div className="mb-5">
+              <label className={clsx(
+                "text-sm font-medium mb-2 block",
+                theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
+              )}>Model</label>
+              <div className={clsx(
+                "max-h-40 overflow-y-auto space-y-1 rounded-lg border p-1",
+                theme === 'light' ? 'border-gray-200' : 'border-zinc-700'
+              )}>
+                {availableModels.map((model) => {
+                  const isSelected = selectedModel === model.id;
+                  return (
+                    <button
+                      key={model.id}
+                      onClick={() => setSelectedModel(model.id)}
+                      className={clsx(
+                        "w-full text-left px-3 py-2 rounded-md text-sm transition-colors",
+                        isSelected
+                          ? theme === 'light'
+                            ? 'bg-emerald-50 text-emerald-700 font-medium'
+                            : 'bg-emerald-600/10 text-emerald-400 font-medium'
+                          : theme === 'light'
+                            ? 'hover:bg-gray-100 text-gray-700'
+                            : 'hover:bg-zinc-800 text-zinc-300'
+                      )}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span>{model.name}</span>
+                        {isSelected && <Check size={14} className="text-emerald-400 shrink-0" />}
+                      </div>
+                      <span className={clsx(
+                        "text-xs",
+                        theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+                      )}>{model.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* System Instructions */}
             <div className="mb-5">
-              <label className="text-sm font-medium text-zinc-300 mb-2 block">System Instructions</label>
+              <label className={clsx(
+                "text-sm font-medium mb-2 block",
+                theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
+              )}>System Instructions</label>
               <textarea
                 value={settings.systemInstructions}
                 onChange={(e) => setSettings((s) => ({ ...s, systemInstructions: e.target.value }))}
                 placeholder="Optional system prompt..."
                 rows={4}
-                className="w-full resize-none rounded-lg bg-zinc-800 border border-zinc-700 px-3 py-2.5 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                className={clsx(
+                  "w-full resize-none rounded-lg border px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50",
+                  theme === 'light'
+                    ? 'bg-white border-gray-300 text-gray-800 placeholder-gray-400'
+                    : 'bg-zinc-800 border-zinc-700 text-zinc-200 placeholder-zinc-500'
+                )}
               />
             </div>
 

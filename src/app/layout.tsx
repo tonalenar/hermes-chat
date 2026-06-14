@@ -13,8 +13,8 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="dark h-full">
-      <body className="m-0 min-h-full bg-zinc-950 text-zinc-100 antialiased">
+    <html lang="en" className="h-full">
+      <body className="m-0 min-h-full antialiased">
         <SupabaseProvider>
           {children}
         </SupabaseProvider>

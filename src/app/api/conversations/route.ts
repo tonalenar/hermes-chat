@@ -6,8 +6,9 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const limit = parseInt(searchParams.get("limit") || "50");
     const offset = parseInt(searchParams.get("offset") || "0");
+    const userId = searchParams.get("user_id");
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("conversations")
       .select(`
         id,
@@ -17,8 +18,13 @@ export async function GET(request: NextRequest) {
         updated_at,
         messages:messages(count)
       `)
-      .order("updated_at", { ascending: false })
-      .range(offset, offset + limit - 1);
+      .order("updated_at", { ascending: false });
+
+    if (userId) {
+      query = query.eq("user_id", userId);
+    }
+
+    const { data, error } = await query.range(offset, offset + limit - 1);
 
     if (error) {
       console.error("[SUPABASE] conversations error:", error);

@@ -45,11 +45,12 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { title, model } = body;
+    const { title, model, user_id } = body;
 
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (title) updates.title = title;
     if (model) updates.model = model;
+    if (user_id) updates.user_id = user_id;
 
     const { data, error } = await supabase
       .from("conversations")
