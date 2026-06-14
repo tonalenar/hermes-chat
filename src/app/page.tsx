@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   MessageSquare, Plus, Trash2, Send, Copy, Check, Menu, X,
-  Sparkles, Code, Bug, BookOpen,
+  Sparkles, Code, Bug, BookOpen, Paperclip, FileText, ImageIcon,
 } from "lucide-react";
 
 // Types
@@ -20,7 +20,7 @@ interface Conversation {
   createdAt: number;
 }
 
-// Markdown renderer (no external deps beyond what's in package.json)
+// Markdown renderer
 function renderMarkdown(text: string) {
   const blocks: Array<{ type: "code"; lang: string; content: string } | { type: "text"; content: string }> = [];
   const codeRegex = /```(\w*)\n([\s\S]*?)```/g;
@@ -42,7 +42,6 @@ function renderMarkdown(text: string) {
 }
 
 function InlineMarkdown({ text }: { text: string }) {
-  // Process inline markdown
   const html = text
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.*?)\*/g, "<em>$1</em>")
@@ -98,7 +97,6 @@ function MessageContent({ content }: { content: string }) {
   );
 }
 
-// Quick actions
 const quickActions = [
   { icon: Sparkles, label: "Analyze", prompt: "Analyze this: " },
   { icon: Code, label: "Create", prompt: "Create: " },
@@ -110,10 +108,12 @@ export default function Home() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeConversation = conversations.find((c) => c.id === activeId) || null;
 
@@ -156,25 +156,48 @@ export default function Home() {
     if (activeId === id) setActiveId(null);
   }, [activeId]);
 
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files || []);
+    if (selected.length > 0) {
+      setFiles((prev) => [...prev, ...selected].slice(0, 5));
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
+
+  const removeFile = useCallback((index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const getFileIcon = (file: File) => {
+    if (file.type.startsWith("image/")) return <ImageIcon size={14} />;
+    return <FileText size={14} />;
+  };
+
   const sendMessage = useCallback(async (text?: string) => {
     const msg = (text || input).trim();
-    if (!msg || isStreaming) return;
+    if (!msg && files.length === 0) return;
+    if (isStreaming) return;
+
+    const filesToSend = [...files];
+    setFiles([]);
 
     let convId = activeId;
     if (!convId) {
       const id = crypto.randomUUID();
-      const conv: Conversation = { id, title: msg.slice(0, 40), messages: [], createdAt: Date.now() };
+      const title = msg.slice(0, 40) || (filesToSend.length > 0 ? `Arquivo(s) (${filesToSend.length})` : "New Chat");
+      const conv: Conversation = { id, title, messages: [], createdAt: Date.now() };
       setConversations((prev) => [conv, ...prev]);
       setActiveId(id);
       convId = id;
     }
 
-    const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: msg };
+    const displayContent = msg || (filesToSend.length > 0 ? `[Arquivo(s) enviado(s): ${filesToSend.map(f => f.name).join(", ")}]` : "");
+    const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: displayContent };
     setConversations((prev) =>
       prev.map((c) => {
         if (c.id !== convId) return c;
         const updated = { ...c, messages: [...c.messages, userMsg] };
-        if (c.messages.length === 0) updated.title = msg.slice(0, 40);
+        if (c.messages.length === 0) updated.title = msg.slice(0, 40) || "Arquivo(s)";
         return updated;
       })
     );
@@ -182,7 +205,6 @@ export default function Home() {
     setIsStreaming(true);
 
     const assistantId = crypto.randomUUID();
-    // Add empty assistant message for streaming
     setConversations((prev) =>
       prev.map((c) =>
         c.id === convId
@@ -192,11 +214,27 @@ export default function Home() {
     );
 
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msg, conversationId: convId }),
-      });
+      const messagesForApi = activeConversation?.messages.slice(0, -1).map((m) => ({
+        role: m.role,
+        content: m.content,
+      })) || [];
+
+      let res;
+      if (filesToSend.length > 0) {
+        const formData = new FormData();
+        formData.append("message", msg);
+        formData.append("messages", JSON.stringify(messagesForApi));
+        formData.append("conversationId", convId);
+        filesToSend.forEach((f) => formData.append("files", f));
+
+        res = await fetch("/api/chat", { method: "POST", body: formData });
+      } else {
+        res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: msg, conversationId: convId, messages: messagesForApi }),
+        });
+      }
 
       if (!res.ok) {
         const err = await res.json();
@@ -270,7 +308,7 @@ export default function Home() {
     } finally {
       setIsStreaming(false);
     }
-  }, [input, isStreaming, activeId]);
+  }, [input, isStreaming, activeId, activeConversation?.messages, files]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -281,12 +319,10 @@ export default function Home() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Mobile overlay */}
       {sidebarOpen && (
         <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />
       )}
 
-      {/* Sidebar */}
       <aside className={`fixed md:relative z-50 md:z-auto h-full w-72 bg-zinc-900 border-r border-zinc-800 flex flex-col transition-transform duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
         <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
           <h1 className="text-lg font-semibold text-zinc-100">Hermes Chat</h1>
@@ -319,9 +355,7 @@ export default function Home() {
         </div>
       </aside>
 
-      {/* Main content */}
       <main className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
         <header className="h-14 border-b border-zinc-800 flex items-center px-4 gap-3 bg-zinc-950/80 backdrop-blur">
           <button onClick={() => setSidebarOpen(true)} className="md:hidden text-zinc-400 hover:text-zinc-200">
             <Menu size={20} />
@@ -331,10 +365,8 @@ export default function Home() {
           </h2>
         </header>
 
-        {/* Messages area */}
         <div className="flex-1 overflow-y-auto">
           {!activeConversation || activeConversation.messages.length === 0 ? (
-            /* Empty state */
             <div className="flex flex-col items-center justify-center h-full px-4">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center mb-6">
                 <Sparkles size={32} className="text-white" />
@@ -355,7 +387,6 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            /* Messages */
             <div className="max-w-3xl mx-auto w-full px-4 py-6 space-y-6">
               {activeConversation.messages.map((msg) => (
                 <div key={msg.id} className={`flex gap-3 ${msg.role === "user" ? "justify-end" : ""}`}>
@@ -384,9 +415,21 @@ export default function Home() {
           )}
         </div>
 
-        {/* Input area */}
         <div className="border-t border-zinc-800 p-4 bg-zinc-950/80 backdrop-blur">
           <div className="max-w-3xl mx-auto relative">
+            {files.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-2">
+                {files.map((file, i) => (
+                  <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-800 text-zinc-300 text-xs">
+                    {getFileIcon(file)}
+                    <span className="max-w-[120px] truncate">{file.name}</span>
+                    <button onClick={() => removeFile(i)} className="text-zinc-500 hover:text-red-400">
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <textarea
               ref={textareaRef}
               value={input}
@@ -394,19 +437,36 @@ export default function Home() {
               onKeyDown={handleKeyDown}
               placeholder="Message Hermes..."
               rows={1}
-              className="w-full resize-none rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3 pr-12 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all max-h-40 overflow-y-auto"
+              className="w-full resize-none rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-3 pr-24 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all max-h-40 overflow-y-auto"
             />
-            <button
-              onClick={() => sendMessage()}
-              disabled={!input.trim() || isStreaming}
-              className="absolute right-3 bottom-3 p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:hover:bg-emerald-600 transition-colors text-white"
-            >
-              <Send size={16} />
-            </button>
+            <div className="absolute right-3 bottom-3 flex items-center gap-1">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+              >
+                <Paperclip size={16} />
+              </button>
+              <button
+                onClick={() => sendMessage()}
+                disabled={!input.trim() && files.length === 0 || isStreaming}
+                className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:hover:bg-emerald-600 transition-colors text-white"
+              >
+                <Send size={16} />
+              </button>
+            </div>
           </div>
           <p className="text-center text-xs text-zinc-600 mt-2">Hermes can make mistakes. Verify important information.</p>
         </div>
       </main>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept="image/*,.txt,.pdf,.doc,.docx,.xls,.xlsx,.zip"
+        onChange={handleFileSelect}
+        className="hidden"
+      />
     </div>
   );
 }

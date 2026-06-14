@@ -5,30 +5,146 @@ const API_KEY = process.env.OPENAI_API_KEY || "";
 const MODEL = process.env.OPENAI_MODEL || "kr/claude-sonnet-4.5";
 
 // In-memory conversation store
-const conversations = new Map<string, Array<{ role: string; content: string }>>();
+const conversations = new Map<string, Array<{ role: string; content: string | any }>>();
+
+// Allowed MIME types
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const ALLOWED_DOCUMENT_TYPES = [
+  "text/plain",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/zip",
+];
+
+function getMimeCategory(type: string): string {
+  if (ALLOWED_IMAGE_TYPES.includes(type)) return "image";
+  if (ALLOWED_DOCUMENT_TYPES.includes(type)) return "document";
+  if (type.startsWith("text/")) return "text";
+  return "unknown";
+}
+
+async function processFile(file: File): Promise<{ type: string; content: string; name: string }> {
+  const bytes = await file.arrayBuffer();
+  const buffer = Buffer.from(bytes);
+  const base64 = buffer.toString("base64");
+  const mimeType = file.type;
+  const category = getMimeCategory(mimeType);
+
+  if (category === "image") {
+    return {
+      type: "image_url",
+      content: `data:${mimeType};base64,${base64}`,
+      name: file.name,
+    };
+  }
+
+  // For documents, try to extract text
+  if (category === "text" || mimeType === "text/plain") {
+    const text = buffer.toString("utf-8");
+    return {
+      type: "text",
+      content: `[Arquivo: ${file.name}]\n${text.slice(0, 5000)}`,
+      name: file.name,
+    };
+  }
+
+  // For PDF, use base64 (most vision models can handle it)
+  if (mimeType === "application/pdf") {
+    return {
+      type: "image_url",
+      content: `data:${mimeType};base64,${base64}`,
+      name: file.name,
+    };
+  }
+
+  // For other documents, just mention the file name
+  return {
+    type: "text",
+    content: `[Arquivo anexado: ${file.name} (tipo: ${mimeType})]`,
+    name: file.name,
+  };
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { message, conversationId, messages: clientMessages } = body;
+    const contentType = req.headers.get("content-type") || "";
 
-    if (!message || typeof message !== "string") {
-      return new Response(JSON.stringify({ error: "Message is required" }), {
+    let message: string;
+    let files: File[] = [];
+    let conversationId: string | undefined;
+    let clientMessages: any[] | undefined;
+
+    if (contentType.includes("multipart/form-data")) {
+      const formData = await req.formData();
+      message = (formData.get("message") as string) || "";
+      conversationId = formData.get("conversationId") as string | undefined;
+      const messagesStr = formData.get("messages") as string | undefined;
+      if (messagesStr) {
+        try {
+          clientMessages = JSON.parse(messagesStr);
+        } catch {}
+      }
+
+      const fileEntries = formData.getAll("files") as File[];
+      files = fileEntries.filter((f) => f.size > 0);
+    } else {
+      const body = await req.json();
+      message = body.message;
+      conversationId = body.conversationId;
+      clientMessages = body.messages;
+    }
+
+    if (!message && files.length === 0) {
+      return new Response(JSON.stringify({ error: "Message or file is required" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     }
 
+    // Process files
+    let processedFiles: any[] = [];
+    if (files.length > 0) {
+      processedFiles = await Promise.all(files.map(processFile));
+    }
+
+    // Build user content (text + images)
+    let userContent: string | any[];
+    
+    if (processedFiles.length > 0) {
+      // Build multimodal content
+      userContent = [];
+      
+      if (message) {
+        userContent.push({ type: "text", text: message });
+      }
+      
+      for (const file of processedFiles) {
+        if (file.type === "image_url") {
+          userContent.push({
+            type: "image_url",
+            image_url: { url: file.content }
+          });
+        } else {
+          userContent.push({ type: "text", text: file.content });
+        }
+      }
+    } else {
+      userContent = message;
+    }
+
     // Build messages array
-    let messages: Array<{ role: string; content: string }>;
+    let messages: Array<{ role: string; content: string | any }>;
 
     if (clientMessages && Array.isArray(clientMessages)) {
-      messages = [...clientMessages, { role: "user", content: message }];
+      messages = [...clientMessages, { role: "user", content: userContent }];
     } else if (conversationId && conversations.has(conversationId)) {
       messages = conversations.get(conversationId)!;
-      messages.push({ role: "user", content: message });
+      messages.push({ role: "user", content: userContent });
     } else {
-      messages = [{ role: "user", content: message }];
+      messages = [{ role: "user", content: userContent }];
     }
 
     // Store conversation
