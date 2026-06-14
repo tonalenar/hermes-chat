@@ -125,6 +125,8 @@ export default function Home() {
     { id: "kr/deepseek-3.2", name: "DeepSeek 3.2", desc: "Open source" },
     { id: "kr/minimax-m2.5", name: "MiniMax M2.5", desc: "Novo" },
     { id: "nvidia/minimaxai/minimax-m2.7", name: "MiniMax M2.7 (NVIDIA)", desc: "Gratuito" },
+    { id: "oc/deepseek-v4-flash-free", name: "DeepSeek V4 Flash (Free)", desc: "OpenCode gratuito" },
+    { id: "oc/mimo-v2.5-free", name: "Mimo V2.5 (Free)", desc: "OpenCode gratuito" },
   ];
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
