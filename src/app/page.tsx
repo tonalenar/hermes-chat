@@ -278,10 +278,12 @@ export default function Home() {
     );
 
     try {
-      const messagesForApi = activeConversation?.messages.slice(0, -1).map((m) => ({
+      // Get messages from the conversation that was active when send was clicked
+      const currentConv = conversations.find(c => c.id === convId);
+      const messagesForApi = (currentConv?.messages || []).slice(0, -1).map((m) => ({
         role: m.role,
         content: m.content,
-      })) || [];
+      }));
 
       let res;
       if (filesToSend.length > 0) {
