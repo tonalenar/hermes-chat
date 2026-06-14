@@ -8,7 +8,7 @@ interface SupabaseContextType {
   user: User | null;
   session: Session | null;
   loading: boolean;
-  signIn: () => Promise<void>;
+  signInWithGithub: () => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -16,7 +16,7 @@ const SupabaseContext = createContext<SupabaseContextType>({
   user: null,
   session: null,
   loading: true,
-  signIn: async () => {},
+  signInWithGithub: async () => {},
   signOut: async () => {},
 });
 
@@ -28,12 +28,31 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
+    // 1. Handle PKCE code exchange on client side (fallback for server exchange)
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get("code");
 
+    const initializeAuth = async () => {
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) {
+          console.error("[AUTH] Client-side code exchange error:", error.message);
+        }
+        // Clean up the URL — remove the code param
+        const cleanUrl = window.location.pathname + window.location.hash;
+        window.history.replaceState({}, "", cleanUrl);
+      }
+
+      // 2. Get current session
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      setSession(currentSession);
+      setUser(currentSession?.user ?? null);
+      setLoading(false);
+    };
+
+    initializeAuth();
+
+    // 3. Listen for auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
@@ -43,11 +62,11 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  const signIn = async () => {
+  const signInWithGithub = async () => {
     await supabase.auth.signInWithOAuth({
       provider: "github",
       options: {
-        redirectTo: `${location.origin}/auth/callback`,
+        redirectTo: `${window.location.origin}/auth/callback`,
       },
     });
   };
@@ -57,7 +76,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <SupabaseContext.Provider value={{ user, session, loading, signIn, signOut }}>
+    <SupabaseContext.Provider value={{ user, session, loading, signInWithGithub, signOut }}>
       {children}
     </SupabaseContext.Provider>
   );
