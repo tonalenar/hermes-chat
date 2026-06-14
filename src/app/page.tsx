@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import {
   MessageSquare, Plus, Trash2, Send, Copy, Check, Menu, X,
   Sparkles, Code, Bug, BookOpen, Paperclip, FileText, ImageIcon,
+  ChevronDown, Bot,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
@@ -112,6 +113,20 @@ export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [selectedModel, setSelectedModel] = useState("kr/auto");
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+
+  const availableModels = [
+    { id: "kr/auto", name: "Auto Select", desc: "9Router escolhe o melhor" },
+    { id: "kr/claude-opus-4.8", name: "Claude Opus 4.8", desc: "Premium coding" },
+    { id: "kr/claude-opus-4.8-thinking", name: "Claude Opus 4.8 Thinking", desc: "Com reasoning" },
+    { id: "kr/claude-sonnet-4.6", name: "Claude Sonnet 4.6", desc: "Balanced" },
+    { id: "kr/claude-sonnet-4.5", name: "Claude Sonnet 4.5", desc: "Economico" },
+    { id: "kr/claude-haiku-4.5", name: "Claude Haiku 4.5", desc: "Rapido" },
+    { id: "kr/deepseek-3.2", name: "DeepSeek 3.2", desc: "Open source" },
+    { id: "kr/minimax-m2.5", name: "MiniMax M2.5", desc: "Novo" },
+    { id: "nvidia/minimaxai/minimax-m2.7", name: "MiniMax M2.7 (NVIDIA)", desc: "Gratuito" },
+  ];
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -237,6 +252,7 @@ export default function Home() {
         formData.append("message", msg);
         formData.append("messages", JSON.stringify(messagesForApi));
         formData.append("conversationId", convId);
+        formData.append("model", selectedModel);
         filesToSend.forEach((f) => formData.append("files", f));
 
         res = await fetch("/api/chat", { method: "POST", body: formData });
@@ -244,7 +260,7 @@ export default function Home() {
         res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: msg, conversationId: convId, messages: messagesForApi }),
+          body: JSON.stringify({ message: msg, conversationId: convId, messages: messagesForApi, model: selectedModel }),
         });
       }
 
@@ -372,6 +388,40 @@ export default function Home() {
           <button onClick={() => setSidebarOpen(true)} className="md:hidden text-zinc-400 hover:text-zinc-200">
             <Menu size={20} />
           </button>
+          
+          {/* Model Selector */}
+          <div className="relative">
+            <button
+              onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm transition-colors"
+            >
+              <Bot size={14} className="text-emerald-400" />
+              <span className="hidden sm:inline">{availableModels.find(m => m.id === selectedModel)?.name || selectedModel}</span>
+              <ChevronDown size={14} className={`transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+            
+            {modelDropdownOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setModelDropdownOpen(false)} />
+                <div className="absolute top-full left-0 mt-1 w-64 bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl z-50 py-1 max-h-80 overflow-y-auto">
+                  {availableModels.map((model) => (
+                    <button
+                      key={model.id}
+                      onClick={() => { setSelectedModel(model.id); setModelDropdownOpen(false); }}
+                      className={`w-full text-left px-4 py-2.5 hover:bg-zinc-800 transition-colors ${selectedModel === model.id ? 'bg-zinc-800' : ''}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-zinc-200">{model.name}</span>
+                        {selectedModel === model.id && <Check size={14} className="text-emerald-400" />}
+                      </div>
+                      <span className="text-xs text-zinc-500">{model.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          
           <h2 className="text-sm font-medium text-zinc-300 truncate">
             {activeConversation?.title || "Hermes Chat"}
           </h2>

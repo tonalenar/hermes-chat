@@ -5,7 +5,7 @@ const BASE_URL = process.env.OPENAI_BASE_URL || "http://localhost:20128/v1";
 const API_KEY = process.env.OPENAI_API_KEY || "";
 const MODEL = process.env.OPENAI_MODEL || "kr/claude-sonnet-4.5";
 
-async function saveToSupabase(conversationId: string, role: string, content: string) {
+async function saveToSupabase(conversationId: string, role: string, content: string, modelName?: string) {
   try {
     // Upsert conversation
     await supabase.from("conversations").upsert({
@@ -19,7 +19,7 @@ async function saveToSupabase(conversationId: string, role: string, content: str
       conversation_id: conversationId,
       role,
       content: typeof content === 'string' ? content : JSON.stringify(content),
-      model: MODEL,
+      model: modelName || model,
     });
   } catch (e) {
     console.error("Supabase save error:", e);
@@ -98,11 +98,14 @@ export async function POST(req: NextRequest) {
     let files: File[] = [];
     let conversationId: string | undefined;
     let clientMessages: any[] | undefined;
+    let model: string = MODEL; // Use env default, or override from request
 
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
       message = (formData.get("message") as string) || "";
       conversationId = formData.get("conversationId") as string | undefined;
+      const modelFromForm = formData.get("model") as string | undefined;
+      if (modelFromForm) model = modelFromForm;
       const messagesStr = formData.get("messages") as string | undefined;
       if (messagesStr) {
         try {
@@ -117,6 +120,7 @@ export async function POST(req: NextRequest) {
       message = body.message;
       conversationId = body.conversationId;
       clientMessages = body.messages;
+      if (body.model) model = body.model;
     }
 
     if (!message && files.length === 0) {
@@ -174,7 +178,7 @@ export async function POST(req: NextRequest) {
       conversations.set(conversationId, messages);
       // Save to Supabase
       const userContentStr = typeof userContent === 'string' ? userContent : JSON.stringify(userContent);
-      saveToSupabase(conversationId, "user", userContentStr);
+      saveToSupabase(conversationId, "user", userContentStr, model);
     }
 
     const response = await fetch(`${BASE_URL}/chat/completions`, {
@@ -184,7 +188,7 @@ export async function POST(req: NextRequest) {
         Authorization: `Bearer ${API_KEY}`,
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: modelName || model,
         messages,
         stream: true,
       }),
@@ -242,7 +246,7 @@ export async function POST(req: NextRequest) {
               const conv = conversations.get(conversationId);
               if (conv) conv.push({ role: "assistant", content: fullContent });
               // Save to Supabase
-              saveToSupabase(conversationId, "assistant", fullContent);
+              saveToSupabase(conversationId, "assistant", fullContent, model);
             }
             controller.close();
           } catch (e) {
@@ -267,7 +271,7 @@ export async function POST(req: NextRequest) {
       const conv = conversations.get(conversationId);
       if (conv) conv.push({ role: "assistant", content });
       // Save to Supabase
-      saveToSupabase(conversationId, "assistant", content);
+      saveToSupabase(conversationId, "assistant", content, model);
     }
     return new Response(JSON.stringify({ response: content }), {
       headers: { "Content-Type": "application/json" },
