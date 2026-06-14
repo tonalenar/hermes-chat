@@ -5,7 +5,7 @@ const BASE_URL = process.env.OPENAI_BASE_URL || "http://localhost:20128/v1";
 const API_KEY = process.env.OPENAI_API_KEY || "";
 const MODEL = process.env.OPENAI_MODEL || "kr/claude-sonnet-4.5";
 
-async function saveToSupabase(conversationId: string, role: string, content: string, modelName?: string) {
+async function saveToSupabase(conversationId: string, role: string, content: string, modelName: string = MODEL) {
   try {
     // Upsert conversation
     await supabase.from("conversations").upsert({
@@ -19,7 +19,7 @@ async function saveToSupabase(conversationId: string, role: string, content: str
       conversation_id: conversationId,
       role,
       content: typeof content === 'string' ? content : JSON.stringify(content),
-      model: modelName || model,
+      model: modelName,
     });
   } catch (e) {
     console.error("Supabase save error:", e);
@@ -178,7 +178,7 @@ export async function POST(req: NextRequest) {
       conversations.set(conversationId, messages);
       // Save to Supabase
       const userContentStr = typeof userContent === 'string' ? userContent : JSON.stringify(userContent);
-      saveToSupabase(conversationId, "user", userContentStr, model);
+      saveToSupabase(conversationId, "user", userContentStr);
     }
 
     const response = await fetch(`${BASE_URL}/chat/completions`, {
@@ -188,7 +188,7 @@ export async function POST(req: NextRequest) {
         Authorization: `Bearer ${API_KEY}`,
       },
       body: JSON.stringify({
-        model: modelName || model,
+        model: model,
         messages,
         stream: true,
       }),
@@ -246,7 +246,7 @@ export async function POST(req: NextRequest) {
               const conv = conversations.get(conversationId);
               if (conv) conv.push({ role: "assistant", content: fullContent });
               // Save to Supabase
-              saveToSupabase(conversationId, "assistant", fullContent, model);
+              saveToSupabase(conversationId, "assistant", fullContent);
             }
             controller.close();
           } catch (e) {
@@ -271,7 +271,7 @@ export async function POST(req: NextRequest) {
       const conv = conversations.get(conversationId);
       if (conv) conv.push({ role: "assistant", content });
       // Save to Supabase
-      saveToSupabase(conversationId, "assistant", content, model);
+      saveToSupabase(conversationId, "assistant", content);
     }
     return new Response(JSON.stringify({ response: content }), {
       headers: { "Content-Type": "application/json" },
