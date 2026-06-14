@@ -6,23 +6,27 @@ const API_KEY = process.env.OPENAI_API_KEY || "";
 const MODEL = process.env.OPENAI_MODEL || "kr/claude-sonnet-4.5";
 
 async function saveToSupabase(conversationId: string, role: string, content: string, modelName: string = MODEL) {
+  console.log("[SUPABASE] saveToSupabase called:", { conversationId, role, modelName });
   try {
     // Upsert conversation
-    await supabase.from("conversations").upsert({
+    const { error: convError } = await supabase.from("conversations").upsert({
       id: conversationId,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'id' });
+    if (convError) console.error("[SUPABASE] conv error:", convError);
 
     // Insert message
-    await supabase.from("messages").insert({
-      id: crypto.randomUUID(),
+    const msgId = crypto.randomUUID();
+    const { error: msgError } = await supabase.from("messages").insert({
+      id: msgId,
       conversation_id: conversationId,
       role,
       content: typeof content === 'string' ? content : JSON.stringify(content),
       model: modelName,
     });
+    if (msgError) console.error("[SUPABASE] msg error:", msgError);
   } catch (e) {
-    console.error("Supabase save error:", e);
+    console.error("[SUPABASE] exception:", e);
   }
 }
 
