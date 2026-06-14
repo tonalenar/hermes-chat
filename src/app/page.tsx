@@ -648,13 +648,14 @@ export default function Home() {
         // Streaming was cancelled, that's fine
       } else {
         const errMsg = e instanceof Error ? e.message : "An error occurred";
+        const cleanErr = errMsg.length > 150 ? errMsg.slice(0, 150) + "..." : errMsg;
         setConversations((prev) =>
           prev.map((c) =>
             c.id === convId
               ? {
                   ...c,
                   messages: c.messages.map((m) =>
-                    m.id === assistantId ? { ...m, content: `Error: ${errMsg}` } : m
+                    m.id === assistantId ? { ...m, content: `Error: ${cleanErr}` } : m
                   ),
                 }
               : c

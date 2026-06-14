@@ -234,8 +234,9 @@ export async function POST(req: NextRequest) {
 
     if (!response.ok) {
       const errText = await response.text();
+      const truncated = errText.slice(0, 200).replace(/[\n\r]+/g, ' ').trim();
       return new Response(
-        JSON.stringify({ error: `API error ${response.status}: ${errText}` }),
+        JSON.stringify({ error: `API error ${response.status}: ${truncated}` }),
         { status: response.status, headers: { "Content-Type": "application/json" } }
       );
     }
