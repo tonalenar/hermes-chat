@@ -164,7 +164,7 @@ export default function Home() {
   useEffect(() => {
     if (!activeId) return;
     const conv = conversations.find((c) => c.id === activeId);
-    if (!conv || conv.messages.length > 0) return;
+    if (conv && conv.messages.length > 0) return;
 
     async function loadMessages() {
       try {
@@ -186,7 +186,7 @@ export default function Home() {
       }
     }
     loadMessages();
-  }, [activeId, conversations]);
+  }, [activeId]);
 
   // Auto scroll
   useEffect(() => {
