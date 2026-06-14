@@ -13,7 +13,6 @@ export async function GET(request: NextRequest) {
         id,
         title,
         model,
-        tokens_used,
         created_at,
         updated_at,
         messages:messages(count)

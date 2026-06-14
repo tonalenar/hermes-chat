@@ -8,11 +8,19 @@ const MODEL = process.env.OPENAI_MODEL || "kr/claude-sonnet-4.5";
 async function saveToSupabase(conversationId: string, role: string, content: string, modelName: string = MODEL) {
   console.log("[SUPABASE] saveToSupabase called:", { conversationId, role, modelName });
   try {
-    // Upsert conversation
-    const { error: convError } = await supabase.from("conversations").upsert({
+    // Upsert conversation with title for new conversations
+    const defaultTitle: string | undefined = role === "user" && typeof content === 'string'
+      ? content.slice(0, 40)
+      : undefined;
+    const convData: Record<string, any> = {
       id: conversationId,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'id' });
+    };
+    if (defaultTitle) convData.title = defaultTitle;
+
+    const { error: convError } = await supabase.from("conversations").upsert(convData, {
+      onConflict: 'id',
+    });
     if (convError) console.error("[SUPABASE] conv error:", convError);
 
     // Insert message
