@@ -182,7 +182,7 @@ export async function POST(req: NextRequest) {
       conversations.set(conversationId, messages);
       // Save to Supabase
       const userContentStr = typeof userContent === 'string' ? userContent : JSON.stringify(userContent);
-      saveToSupabase(conversationId, "user", userContentStr);
+      saveToSupabase(conversationId, "user", userContentStr, model);
     }
 
     const response = await fetch(`${BASE_URL}/chat/completions`, {
@@ -250,7 +250,7 @@ export async function POST(req: NextRequest) {
               const conv = conversations.get(conversationId);
               if (conv) conv.push({ role: "assistant", content: fullContent });
               // Save to Supabase
-              saveToSupabase(conversationId, "assistant", fullContent);
+              saveToSupabase(conversationId, "assistant", fullContent, model);
             }
             controller.close();
           } catch (e) {
@@ -275,7 +275,7 @@ export async function POST(req: NextRequest) {
       const conv = conversations.get(conversationId);
       if (conv) conv.push({ role: "assistant", content });
       // Save to Supabase
-      saveToSupabase(conversationId, "assistant", content);
+      saveToSupabase(conversationId, "assistant", content, model);
     }
     return new Response(JSON.stringify({ response: content }), {
       headers: { "Content-Type": "application/json" },
