@@ -1,8 +1,30 @@
 import { NextRequest } from "next/server";
+import { supabase } from "@/lib/supabase";
 
 const BASE_URL = process.env.OPENAI_BASE_URL || "http://localhost:20128/v1";
 const API_KEY = process.env.OPENAI_API_KEY || "";
 const MODEL = process.env.OPENAI_MODEL || "kr/claude-sonnet-4.5";
+
+async function saveToSupabase(conversationId: string, role: string, content: string) {
+  try {
+    // Upsert conversation
+    await supabase.from("conversations").upsert({
+      id: conversationId,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'id' });
+
+    // Insert message
+    await supabase.from("messages").insert({
+      id: crypto.randomUUID(),
+      conversation_id: conversationId,
+      role,
+      content: typeof content === 'string' ? content : JSON.stringify(content),
+      model: MODEL,
+    });
+  } catch (e) {
+    console.error("Supabase save error:", e);
+  }
+}
 
 // In-memory conversation store
 const conversations = new Map<string, Array<{ role: string; content: string | any }>>();
@@ -150,6 +172,9 @@ export async function POST(req: NextRequest) {
     // Store conversation
     if (conversationId) {
       conversations.set(conversationId, messages);
+      // Save to Supabase
+      const userContentStr = typeof userContent === 'string' ? userContent : JSON.stringify(userContent);
+      saveToSupabase(conversationId, "user", userContentStr);
     }
 
     const response = await fetch(`${BASE_URL}/chat/completions`, {
@@ -216,6 +241,8 @@ export async function POST(req: NextRequest) {
             if (conversationId && fullContent) {
               const conv = conversations.get(conversationId);
               if (conv) conv.push({ role: "assistant", content: fullContent });
+              // Save to Supabase
+              saveToSupabase(conversationId, "assistant", fullContent);
             }
             controller.close();
           } catch (e) {
@@ -239,6 +266,8 @@ export async function POST(req: NextRequest) {
     if (conversationId) {
       const conv = conversations.get(conversationId);
       if (conv) conv.push({ role: "assistant", content });
+      // Save to Supabase
+      saveToSupabase(conversationId, "assistant", content);
     }
     return new Response(JSON.stringify({ response: content }), {
       headers: { "Content-Type": "application/json" },

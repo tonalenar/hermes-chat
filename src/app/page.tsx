@@ -5,6 +5,7 @@ import {
   MessageSquare, Plus, Trash2, Send, Copy, Check, Menu, X,
   Sparkles, Code, Bug, BookOpen, Paperclip, FileText, ImageIcon,
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 // Types
 interface Message {
@@ -117,22 +118,33 @@ export default function Home() {
 
   const activeConversation = conversations.find((c) => c.id === activeId) || null;
 
-  // Load from localStorage
+  // Load from Supabase
   useEffect(() => {
-    const saved = localStorage.getItem("hermes-conversations");
-    if (saved) {
-      const parsed = JSON.parse(saved) as Conversation[];
-      setConversations(parsed);
-      if (parsed.length > 0) setActiveId(parsed[0].id);
-    }
-  }, []);
+    async function loadFromSupabase() {
+      try {
+        const { data, error } = await supabase
+          .from("conversations")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(50);
 
-  // Save to localStorage
-  useEffect(() => {
-    if (conversations.length > 0) {
-      localStorage.setItem("hermes-conversations", JSON.stringify(conversations));
+        if (error) throw error;
+        if (data && data.length > 0) {
+          const convs: Conversation[] = data.map((c: any) => ({
+            id: c.id,
+            title: c.title,
+            messages: [],
+            createdAt: new Date(c.created_at).getTime(),
+          }));
+          setConversations(convs);
+          setActiveId(convs[0].id);
+        }
+      } catch (e) {
+        console.error("Error loading conversations:", e);
+      }
     }
-  }, [conversations]);
+    loadFromSupabase();
+  }, []);
 
   // Auto scroll
   useEffect(() => {
