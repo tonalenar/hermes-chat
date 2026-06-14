@@ -5,8 +5,14 @@ const BASE_URL = process.env.OPENAI_BASE_URL || "http://localhost:20128/v1";
 const API_KEY = process.env.OPENAI_API_KEY || "";
 const MODEL = process.env.OPENAI_MODEL || "kr/claude-sonnet-4.5";
 
-async function saveToSupabase(conversationId: string, role: string, content: string, modelName: string = MODEL) {
-  console.log("[SUPABASE] saveToSupabase called:", { conversationId, role, modelName });
+async function saveToSupabase(
+  conversationId: string,
+  role: string,
+  content: string,
+  modelName: string = MODEL,
+  tokensUsed?: number
+) {
+  console.log("[SUPABASE] saveToSupabase called:", { conversationId, role, modelName, tokensUsed });
   try {
     // Upsert conversation with title for new conversations
     const defaultTitle: string | undefined = role === "user" && typeof content === 'string'
@@ -17,6 +23,10 @@ async function saveToSupabase(conversationId: string, role: string, content: str
       updated_at: new Date().toISOString(),
     };
     if (defaultTitle) convData.title = defaultTitle;
+    // Update tokens_used on conversation (aggregate)
+    if (tokensUsed) {
+      convData.tokens_used = tokensUsed;
+    }
 
     const { error: convError } = await supabase.from("conversations").upsert(convData, {
       onConflict: 'id',
@@ -25,13 +35,17 @@ async function saveToSupabase(conversationId: string, role: string, content: str
 
     // Insert message
     const msgId = crypto.randomUUID();
-    const { error: msgError } = await supabase.from("messages").insert({
+    const msgInsert: Record<string, any> = {
       id: msgId,
       conversation_id: conversationId,
       role,
       content: typeof content === 'string' ? content : JSON.stringify(content),
       model: modelName,
-    });
+    };
+    if (tokensUsed !== undefined) {
+      msgInsert.tokens_used = tokensUsed;
+    }
+    const { error: msgError } = await supabase.from("messages").insert(msgInsert);
     if (msgError) console.error("[SUPABASE] msg error:", msgError);
   } catch (e) {
     console.error("[SUPABASE] exception:", e);
@@ -231,6 +245,7 @@ export async function POST(req: NextRequest) {
       const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let fullContent = "";
+      let totalTokensUsed: number | undefined;
 
       const stream = new ReadableStream({
         async start(controller) {
@@ -260,17 +275,27 @@ export async function POST(req: NextRequest) {
                       new TextEncoder().encode(`data: ${JSON.stringify({ content })}\n\n`)
                     );
                   }
+                  // Capture usage from final chunk (OpenAI-compatible format)
+                  if (parsed.usage) {
+                    totalTokensUsed = parsed.usage.total_tokens;
+                    // Forward usage info as metadata event
+                    controller.enqueue(
+                      new TextEncoder().encode(
+                        `data: ${JSON.stringify({ type: "metadata", tokens_used: totalTokensUsed })}\n\n`
+                      )
+                    );
+                  }
                 } catch {
                   // skip malformed chunks
                 }
               }
             }
-            // Save assistant response
+            // Save assistant response with token count
             if (conversationId && fullContent) {
               const conv = conversations.get(conversationId);
               if (conv) conv.push({ role: "assistant", content: fullContent });
-              // Save to Supabase
-              saveToSupabase(conversationId, "assistant", fullContent, model);
+              // Save to Supabase with tokens_used if available
+              saveToSupabase(conversationId, "assistant", fullContent, model, totalTokensUsed);
             }
             controller.close();
           } catch (e) {
@@ -291,15 +316,23 @@ export async function POST(req: NextRequest) {
     // Fallback: non-streaming response
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || "";
+    const tokensUsed = data.usage?.total_tokens;
     if (conversationId) {
       const conv = conversations.get(conversationId);
       if (conv) conv.push({ role: "assistant", content });
-      // Save to Supabase
-      saveToSupabase(conversationId, "assistant", content, model);
+      // Save to Supabase with token count
+      saveToSupabase(conversationId, "assistant", content, model, tokensUsed);
     }
-    return new Response(JSON.stringify({ response: content }), {
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ 
+        response: content,
+        tokens_used: tokensUsed,
+        metadata: tokensUsed ? { tokens_used: tokensUsed } : undefined
+      }),
+      {
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Unknown error";
     console.error("Chat API error:", msg);

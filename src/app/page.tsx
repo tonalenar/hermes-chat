@@ -6,6 +6,8 @@ import {
   Sparkles, Code, Bug, BookOpen, Paperclip, FileText, ImageIcon,
   ChevronDown, Bot, Square, RotateCcw, Pencil, Download, Sun, Moon,
   Settings, Search, LogIn, LogOut, User, Sliders,
+  Pin, PinOff, Archive, Share2, Globe, MoreHorizontal, GitFork,
+  Palette,
 } from "lucide-react";
 import { useSupabase } from "@/lib/supabase-context";
 import clsx from "clsx";
@@ -23,7 +25,41 @@ interface Conversation {
   title: string;
   messages: Message[];
   createdAt: number;
+  pinned?: boolean;
+  archived?: boolean;
 }
+
+// CSS animation keyframes
+const animationStyles = `
+@keyframes messageFadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes modalOverlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modalContentIn {
+  from { opacity: 0; transform: scale(0.95) translateY(-8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes slideUpIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-message-in {
+  animation: messageFadeIn 0.3s ease-out forwards;
+}
+.animate-modal-overlay {
+  animation: modalOverlayIn 0.2s ease-out forwards;
+}
+.animate-modal-content {
+  animation: modalContentIn 0.2s ease-out forwards;
+}
+.animate-slide-up {
+  animation: slideUpIn 0.25s ease-out forwards;
+}
+`;
 
 // Markdown renderer
 function renderMarkdown(text: string) {
@@ -133,6 +169,9 @@ interface AppSettings {
   theme: "dark" | "light";
   temperature: number;
   systemInstructions: string;
+  showArchived?: boolean;
+  accentColor?: string;
+  bgColor?: string;
 }
 
 const defaultSettings: AppSettings = {
@@ -170,6 +209,16 @@ export default function Home() {
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+  // New feature states
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; messageId: string; role: string } | null>(null);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [totalTokens, setTotalTokens] = useState(0);
+  const [presets, setPresets] = useState<{ name: string; instructions: string }[]>([]);
+  // Drag & drop state
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounter = useRef(0);
 
   const availableModels = [
     { id: "kr/auto", name: "Auto Select", desc: "9Router escolhe o melhor" },
@@ -189,13 +238,15 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sidebarSearchRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const mainContainerRef = useRef<HTMLDivElement>(null);
 
   const activeConversation = conversations.find((c) => c.id === activeId) || null;
 
   // Theme helper
   const theme = settings.theme;
 
-  // Apply theme
+  // Apply theme and custom colors
   useEffect(() => {
     const root = document.documentElement;
     if (settings.theme === "light") {
@@ -207,7 +258,18 @@ export default function Home() {
       root.classList.add("dark");
       root.style.colorScheme = "dark";
     }
-  }, [settings.theme]);
+    // Custom theme colors
+    if (settings.accentColor) {
+      root.style.setProperty('--color-accent', settings.accentColor);
+    } else {
+      root.style.setProperty('--color-accent', '#10b981');
+    }
+    if (settings.bgColor && settings.theme === 'dark') {
+      root.style.setProperty('--color-bg', settings.bgColor);
+    } else {
+      root.style.setProperty('--color-bg', '#09090b');
+    }
+  }, [settings.theme, settings.accentColor, settings.bgColor]);
 
   // Save settings to localStorage
   useEffect(() => {
@@ -226,6 +288,14 @@ export default function Home() {
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [files]);
+
+  // Load presets from localStorage
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("hermes-presets");
+      if (stored) setPresets(JSON.parse(stored));
+    } catch { /* ignore */ }
+  }, []);
 
   // Load conversations from Supabase on mount
   useEffect(() => {
@@ -281,16 +351,35 @@ export default function Home() {
     loadMessages();
   }, [activeId]);
 
-  // Auto scroll
+  // Smart auto-scroll
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeConversation?.messages]);
+    if (!autoScroll || !messagesContainerRef.current) return;
+    const container = messagesContainerRef.current;
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+    if (isNearBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [activeConversation?.messages, autoScroll]);
+
+  // Detect manual scroll to disable auto-scroll
+  const handleScroll = useCallback(() => {
+    if (!messagesContainerRef.current) return;
+    const container = messagesContainerRef.current;
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+    if (!isNearBottom && autoScroll) {
+      setAutoScroll(false);
+    } else if (isNearBottom && !autoScroll) {
+      setAutoScroll(true);
+    }
+  }, [autoScroll]);
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       // Escape: close modals/dropdowns
       if (e.key === "Escape") {
+        if (contextMenu) { setContextMenu(null); return; }
+        if (shareModalOpen) { setShareModalOpen(false); return; }
         if (fullscreenImage) { setFullscreenImage(null); return; }
         if (settingsOpen) { setSettingsOpen(false); return; }
         if (modelDropdownOpen) { setModelDropdownOpen(false); return; }
@@ -319,7 +408,7 @@ export default function Home() {
 
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [sidebarOpen, settingsOpen, modelDropdownOpen, exportDropdownOpen, editingMessageId, editingTitle, sidebarSearch, fullscreenImage]);
+  }, [sidebarOpen, settingsOpen, modelDropdownOpen, exportDropdownOpen, editingMessageId, editingTitle, sidebarSearch, fullscreenImage, contextMenu, shareModalOpen]);
 
   const newChat = useCallback(() => {
     const id = crypto.randomUUID();
@@ -472,6 +561,7 @@ export default function Home() {
         formData.append("model", selectedModel);
         formData.append("temperature", String(settings.temperature));
         formData.append("systemInstructions", systemInstruction);
+        formData.append("web_search", String(webSearchEnabled));
         filesToSend.forEach((f) => formData.append("files", f));
 
         res = await fetch("/api/chat", { method: "POST", body: formData, signal: controller.signal });
@@ -486,6 +576,7 @@ export default function Home() {
             model: selectedModel,
             temperature: settings.temperature,
             systemInstructions: systemInstruction,
+            web_search: webSearchEnabled,
           }),
           signal: controller.signal,
         });
@@ -528,6 +619,11 @@ export default function Home() {
                   )
                 );
               }
+              if (parsed.tokens_used) {
+                setTotalTokens(parsed.tokens_used);
+              } else if (parsed.type === "metadata" && parsed.tokens_used) {
+                setTotalTokens(parsed.tokens_used);
+              }
             } catch { /* skip */ }
           }
         }
@@ -569,7 +665,7 @@ export default function Home() {
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
-  }, [input, isStreaming, activeId, activeConversation?.messages, files, selectedModel, settings.systemInstructions, settings.temperature, user?.id]);
+  }, [input, isStreaming, activeId, activeConversation?.messages, files, selectedModel, settings.systemInstructions, settings.temperature, webSearchEnabled, user?.id]);
 
   // Regenerate: remove last assistant message and resend last user message
   const regenerate = useCallback(() => {
@@ -664,6 +760,59 @@ export default function Home() {
     );
   }, [activeConversation, activeId]);
 
+  // Fork conversation
+  const forkConversation = useCallback((msgId: string) => {
+    if (!activeConversation) return;
+    const msgs = activeConversation.messages;
+    const msgIndex = msgs.findIndex((m) => m.id === msgId);
+    if (msgIndex === -1) return;
+    const forkedMsgs = msgs.slice(0, msgIndex + 1);
+    const convTitle = activeConversation.title + " (fork)";
+    const newId = crypto.randomUUID();
+    const conv: Conversation = {
+      id: newId, title: convTitle, messages: forkedMsgs.map(m => ({ ...m })),
+      createdAt: Date.now(),
+    };
+    setConversations((prev) => [conv, ...prev]);
+    setActiveId(newId);
+    // Save to Supabase
+    fetch(`/api/conversations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: newId,
+        title: convTitle,
+        messages: forkedMsgs.map(m => ({ role: m.role, content: m.content })),
+      }),
+    }).catch((e) => console.error("Fork save error:", e));
+  }, [activeConversation]);
+
+  // Toggle pin
+  const togglePin = useCallback(async (id: string) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, pinned: !c.pinned } : c))
+    );
+    const conv = conversations.find(c => c.id === id);
+    await fetch(`/api/conversations/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned: !conv?.pinned }),
+    }).catch(() => {});
+  }, [conversations]);
+
+  // Archive chat
+  const archiveChat = useCallback(async (id: string) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, archived: true } : c))
+    );
+    if (activeId === id) setActiveId(null);
+    await fetch(`/api/conversations/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    }).catch(() => {});
+  }, [activeId]);
+
   // Export
   const exportAsJSON = useCallback(() => {
     if (!activeConversation) return;
@@ -707,6 +856,39 @@ export default function Home() {
     setExportDropdownOpen(false);
   }, [activeConversation]);
 
+  // Share conversation
+  const shareConversation = useCallback(() => {
+    if (!activeConversation) return;
+    const shareToken = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+    // Save share token to Supabase
+    fetch(`/api/conversations/${activeConversation.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ share_token: shareToken }),
+    }).catch(() => {});
+    setShareModalOpen(true);
+  }, [activeConversation]);
+
+  // Save/Delete presets
+  const savePreset = useCallback(() => {
+    const instructions = settings.systemInstructions.trim();
+    if (!instructions) return;
+    const name = prompt("Name this preset:") || `Preset ${presets.length + 1}`;
+    const newPresets = [...presets, { name, instructions }];
+    setPresets(newPresets);
+    try { localStorage.setItem("hermes-presets", JSON.stringify(newPresets)); } catch {}
+  }, [settings.systemInstructions, presets]);
+
+  const deletePreset = useCallback((index: number) => {
+    const newPresets = presets.filter((_, i) => i !== index);
+    setPresets(newPresets);
+    try { localStorage.setItem("hermes-presets", JSON.stringify(newPresets)); } catch {}
+  }, [presets]);
+
+  const applyPreset = useCallback((instructions: string) => {
+    setSettings((s) => ({ ...s, systemInstructions: instructions }));
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -714,12 +896,62 @@ export default function Home() {
     }
   };
 
+  // Drag & Drop handlers
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setIsDragging(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) {
+      setIsDragging(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    dragCounter.current = 0;
+    const droppedFiles = Array.from(e.dataTransfer.files || []);
+    if (droppedFiles.length > 0) {
+      setFiles((prev) => [...prev, ...droppedFiles].slice(0, 5));
+    }
+  }, []);
+
   // Compute filtered conversations for sidebar
   const filteredConversations = useMemo(() => {
-    if (!sidebarSearch.trim()) return conversations;
-    const q = sidebarSearch.toLowerCase();
-    return conversations.filter((c) => c.title.toLowerCase().includes(q));
+    let list = conversations;
+    // Filter by search
+    if (sidebarSearch.trim()) {
+      const q = sidebarSearch.toLowerCase();
+      list = list.filter((c) => c.title.toLowerCase().includes(q));
+    }
+    // Separate pinned, normal, archived
+    const pinned = list.filter((c) => c.pinned && !c.archived);
+    const normal = list.filter((c) => !c.pinned && !c.archived);
+    const archived = list.filter((c) => c.archived);
+    return { pinned, normal, archived };
   }, [conversations, sidebarSearch]);
+
+  // Compute total tokens from active conversation messages
+  const currentTokens = useMemo(() => {
+    if (!activeConversation) return 0;
+    // Sum from stored token data - we store tokens_used per conversation
+    return totalTokens;
+  }, [totalTokens, activeConversation]);
 
   // Current time for relative timestamps
   const [now, setNow] = useState(Date.now());
@@ -728,837 +960,1232 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
-  return (
-    <div className={clsx(
-      "flex h-screen overflow-hidden",
-      theme === 'light' ? 'bg-gray-50 text-gray-900' : 'bg-zinc-950 text-zinc-100'
-    )}>
-      {/* Overlay for mobile sidebar */}
-      {sidebarOpen && (
-        <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />
+  // Conversation item render helper
+  const conversationItem = (c: Conversation, isArchived?: boolean) => (
+    <div
+      key={c.id}
+      className={clsx(
+        "group flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition-colors",
+        activeId === c.id
+          ? theme === 'light' ? 'bg-gray-100 text-gray-900' : 'bg-zinc-800 text-zinc-100'
+          : theme === 'light' ? 'text-gray-500 hover:bg-gray-50 hover:text-gray-700' : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200',
+        isArchived && "opacity-50"
       )}
-
-      {/* Sidebar */}
-      <aside className={clsx(
-        "fixed md:relative z-50 md:z-auto h-full w-72 border-r flex flex-col transition-transform duration-200",
-        sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
-        theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
-      )}>
-        <div className={clsx(
-          "p-4 border-b flex items-center justify-between",
-          theme === 'light' ? 'border-gray-200' : 'border-zinc-800'
-        )}>
-          <h1 className={clsx(
-            "text-lg font-semibold",
-            theme === 'light' ? 'text-gray-900' : 'text-zinc-100'
-          )}>Hermes Chat</h1>
-          <button onClick={() => setSidebarOpen(false)} className={clsx(
-            "md:hidden",
-            theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
-          )}>
-            <X size={20} />
-          </button>
-        </div>
-
-        {/* Search */}
-        <div className="px-3 pt-3">
-          <div className="relative">
-            <Search size={14} className={clsx(
-              "absolute left-3 top-1/2 -translate-y-1/2",
-              theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
-            )} />
-            <input
-              ref={sidebarSearchRef}
-              type="text"
-              value={sidebarSearch}
-              onChange={(e) => setSidebarSearch(e.target.value)}
-              placeholder="Search conversations..."
-              className={clsx(
-                "w-full pl-8 pr-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50",
-                theme === 'light'
-                  ? 'bg-gray-100 border border-gray-300 text-gray-800 placeholder-gray-400'
-                  : 'bg-zinc-800 border border-zinc-700 text-zinc-200 placeholder-zinc-500'
-              )}
-            />
-            {sidebarSearch && (
-              <button
-                onClick={() => setSidebarSearch("")}
-                className={clsx(
-                  "absolute right-2 top-1/2 -translate-y-1/2",
-                  theme === 'light' ? 'text-gray-400 hover:text-gray-600' : 'text-zinc-500 hover:text-zinc-300'
-                )}
-              >
-                <X size={14} />
-              </button>
+      onClick={() => { setActiveId(c.id); setSidebarOpen(false); }}
+    >
+      <MessageSquare size={14} className="shrink-0" />
+      {editingTitle === c.id ? (
+        <div className="flex-1 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          <input
+            autoFocus
+            value={titleInput}
+            onChange={(e) => setTitleInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") saveRename(c.id); if (e.key === "Escape") setEditingTitle(null); }}
+            className={clsx(
+              "flex-1 min-w-0 border rounded px-1.5 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500",
+              theme === 'light'
+                ? 'bg-gray-200 border-gray-400 text-gray-800'
+                : 'bg-zinc-700 border-zinc-600 text-zinc-200'
             )}
-          </div>
-        </div>
-
-        {/* New Chat */}
-        <div className="p-3">
-          <button onClick={newChat} className={clsx(
-            "w-full flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors",
-            theme === 'light'
-              ? 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+          />
+          <button onClick={() => saveRename(c.id)} className="text-emerald-400 hover:text-emerald-300 p-0.5">
+            <Check size={12} />
+          </button>
+          <button onClick={() => setEditingTitle(null)} className={clsx(
+            "p-0.5",
+            theme === 'light' ? 'text-gray-400 hover:text-gray-600' : 'text-zinc-400 hover:text-zinc-300'
           )}>
-            <Plus size={16} /> New Chat
+            <X size={12} />
           </button>
         </div>
-
-        {/* Conversation List */}
-        <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
-          {filteredConversations.length === 0 && sidebarSearch.trim() ? (
-            <p className={clsx(
-              "text-center text-sm py-4",
-              theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
-            )}>No conversations found</p>
-          ) : (
-            filteredConversations.map((c) => (
-              <div
-                key={c.id}
-                className={clsx(
-                  "group flex items-center gap-2 px-3 py-2.5 rounded-lg cursor-pointer transition-colors",
-                  activeId === c.id
-                    ? theme === 'light' ? 'bg-gray-100 text-gray-900' : 'bg-zinc-800 text-zinc-100'
-                    : theme === 'light' ? 'text-gray-500 hover:bg-gray-50 hover:text-gray-700' : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
-                )}
-                onClick={() => { setActiveId(c.id); setSidebarOpen(false); }}
-              >
-                <MessageSquare size={14} className="shrink-0" />
-                {editingTitle === c.id ? (
-                  <div className="flex-1 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      autoFocus
-                      value={titleInput}
-                      onChange={(e) => setTitleInput(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") saveRename(c.id); if (e.key === "Escape") setEditingTitle(null); }}
-                      className={clsx(
-                        "flex-1 min-w-0 border rounded px-1.5 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500",
-                        theme === 'light'
-                          ? 'bg-gray-200 border-gray-400 text-gray-800'
-                          : 'bg-zinc-700 border-zinc-600 text-zinc-200'
-                      )}
-                    />
-                    <button onClick={() => saveRename(c.id)} className="text-emerald-400 hover:text-emerald-300 p-0.5">
-                      <Check size={12} />
-                    </button>
-                    <button onClick={() => setEditingTitle(null)} className={clsx(
-                      "p-0.5",
-                      theme === 'light' ? 'text-gray-400 hover:text-gray-600' : 'text-zinc-400 hover:text-zinc-300'
-                    )}>
-                      <X size={12} />
-                    </button>
-                  </div>
-                ) : (
-                  <span
-                    className="flex-1 text-sm truncate"
-                    onClick={() => { setActiveId(c.id); setSidebarOpen(false); }}
-                  >
-                    {c.title}
-                  </span>
-                )}
-                {editingTitle !== c.id && (
-                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); startRename(c.id, c.title); }}
-                      className={clsx(
-                        "p-1",
-                        theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-500 hover:text-zinc-300'
-                      )}
-                      title="Rename"
-                    >
-                      <Pencil size={12} />
-                    </button>
-                    <button
-                      onClick={async (e) => { e.stopPropagation(); if (window.confirm("Delete this conversation?")) deleteChat(c.id); }}
-                      className={clsx(
-                        "p-1",
-                        theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
-                      )}
-                      title="Delete"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      </aside>
-
-      {/* Main */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        <header className={clsx(
-          "h-14 border-b flex items-center px-4 gap-3 backdrop-blur",
-          theme === 'light'
-            ? 'border-gray-200 bg-white/80'
-            : 'border-zinc-800 bg-zinc-950/80'
-        )}>
-          <button onClick={() => setSidebarOpen(true)} className={clsx(
-            "md:hidden",
-            theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
-          )}>
-            <Menu size={20} />
-          </button>
-
-          {/* Model Selector */}
-          <div className="relative">
+      ) : (
+        <span
+          className="flex-1 text-sm truncate"
+          onClick={() => { setActiveId(c.id); setSidebarOpen(false); }}
+        >
+          {c.title}
+        </span>
+      )}
+      {editingTitle !== c.id && (
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
+          {!isArchived && (
             <button
-              onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
+              onClick={(e) => { e.stopPropagation(); togglePin(c.id); }}
               className={clsx(
-                "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors",
-                theme === 'light'
-                  ? 'bg-gray-100 hover:bg-gray-200 text-gray-600'
-                  : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+                "p-1",
+                c.pinned
+                  ? theme === 'light' ? 'text-emerald-500' : 'text-emerald-400'
+                  : theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-500 hover:text-zinc-300'
               )}
+              title={c.pinned ? "Unpin" : "Pin"}
             >
-              <Bot size={14} className="text-emerald-400" />
-              <span className="hidden sm:inline">{availableModels.find(m => m.id === selectedModel)?.name || selectedModel}</span>
-              <ChevronDown size={14} className={`transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
+              {c.pinned ? <PinOff size={12} /> : <Pin size={12} />}
             </button>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); startRename(c.id, c.title); }}
+            className={clsx(
+              "p-1",
+              theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-500 hover:text-zinc-300'
+            )}
+            title="Rename"
+          >
+            <Pencil size={12} />
+          </button>
+          {!isArchived && (
+            <button
+              onClick={async (e) => { e.stopPropagation(); archiveChat(c.id); }}
+              className={clsx(
+                "p-1",
+                theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-500 hover:text-zinc-300'
+              )}
+              title="Archive"
+            >
+              <Archive size={12} />
+            </button>
+          )}
+          <button
+            onClick={async (e) => { e.stopPropagation(); if (window.confirm("Delete this conversation?")) deleteChat(c.id); }}
+            className={clsx(
+              "p-1",
+              theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
+            )}
+            title="Delete"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
 
-            {modelDropdownOpen && (
+  return (
+    <>
+      <style>{animationStyles}</style>
+      <div
+        ref={mainContainerRef}
+        className={clsx(
+          "flex h-screen overflow-hidden",
+          theme === 'light' ? 'bg-gray-50 text-gray-900' : 'bg-zinc-950 text-zinc-100'
+        )}
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {/* Drag & Drop Overlay */}
+        {isDragging && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center pointer-events-none animate-modal-overlay">
+            <div className={clsx(
+              "rounded-2xl border-2 border-dashed px-10 py-8 flex flex-col items-center gap-3 shadow-2xl",
+              theme === 'light'
+                ? 'bg-white/95 border-emerald-400'
+                : 'bg-zinc-900/95 border-emerald-500'
+            )}>
+              <Paperclip size={48} className="text-emerald-400" />
+              <p className={clsx(
+                "text-lg font-medium",
+                theme === 'light' ? 'text-gray-800' : 'text-zinc-200'
+              )}>Solte os arquivos aqui</p>
+              <p className={clsx(
+                "text-sm",
+                theme === 'light' ? 'text-gray-500' : 'text-zinc-400'
+              )}>Imagens, PDFs, documentos...</p>
+            </div>
+          </div>
+        )}
+
+        {/* Overlay for mobile sidebar */}
+        {sidebarOpen && (
+          <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />
+        )}
+
+        {/* Sidebar */}
+        <aside className={clsx(
+          "fixed md:relative z-50 md:z-auto h-full w-72 border-r flex flex-col transition-transform duration-200",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+          theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
+        )}>
+          <div className={clsx(
+            "p-4 border-b flex items-center justify-between",
+            theme === 'light' ? 'border-gray-200' : 'border-zinc-800'
+          )}>
+            <h1 className={clsx(
+              "text-lg font-semibold",
+              theme === 'light' ? 'text-gray-900' : 'text-zinc-100'
+            )}>Hermes Chat</h1>
+            <button onClick={() => setSidebarOpen(false)} className={clsx(
+              "md:hidden",
+              theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
+            )}>
+              <X size={20} />
+            </button>
+          </div>
+
+          {/* Search */}
+          <div className="px-3 pt-3">
+            <div className="relative">
+              <Search size={14} className={clsx(
+                "absolute left-3 top-1/2 -translate-y-1/2",
+                theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+              )} />
+              <input
+                ref={sidebarSearchRef}
+                type="text"
+                value={sidebarSearch}
+                onChange={(e) => setSidebarSearch(e.target.value)}
+                placeholder="Search conversations..."
+                className={clsx(
+                  "w-full pl-8 pr-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50",
+                  theme === 'light'
+                    ? 'bg-gray-100 border border-gray-300 text-gray-800 placeholder-gray-400'
+                    : 'bg-zinc-800 border border-zinc-700 text-zinc-200 placeholder-zinc-500'
+                )}
+              />
+              {sidebarSearch && (
+                <button
+                  onClick={() => setSidebarSearch("")}
+                  className={clsx(
+                    "absolute right-2 top-1/2 -translate-y-1/2",
+                    theme === 'light' ? 'text-gray-400 hover:text-gray-600' : 'text-zinc-500 hover:text-zinc-300'
+                  )}
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* New Chat */}
+          <div className="p-3">
+            <button onClick={newChat} className={clsx(
+              "w-full flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors",
+              theme === 'light'
+                ? 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+            )}>
+              <Plus size={16} /> New Chat
+            </button>
+          </div>
+
+          {/* Conversation List */}
+          <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
+            {filteredConversations.pinned.length === 0 && filteredConversations.normal.length === 0 && filteredConversations.archived.length === 0 && sidebarSearch.trim() ? (
+              <p className={clsx(
+                "text-center text-sm py-4",
+                theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+              )}>No conversations found</p>
+            ) : (
               <>
-                <div className="fixed inset-0 z-40" onClick={() => setModelDropdownOpen(false)} />
-                <div className={clsx(
-                  "absolute top-full left-0 mt-1 w-64 border rounded-lg shadow-xl z-50 py-1 max-h-80 overflow-y-auto",
-                  theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
-                )}>
-                  {availableModels.map((model) => (
-                    <button
-                      key={model.id}
-                      onClick={() => { setSelectedModel(model.id); setModelDropdownOpen(false); }}
-                      className={clsx(
-                        "w-full text-left px-4 py-2.5 transition-colors",
-                        selectedModel === model.id
-                          ? theme === 'light' ? 'bg-gray-100' : 'bg-zinc-800'
-                          : theme === 'light' ? 'hover:bg-gray-50' : 'hover:bg-zinc-800'
-                      )}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className={clsx(
-                          "text-sm font-medium",
-                          theme === 'light' ? 'text-gray-800' : 'text-zinc-200'
-                        )}>{model.name}</span>
-                        {selectedModel === model.id && <Check size={14} className="text-emerald-400" />}
-                      </div>
-                      <span className={clsx(
-                        "text-xs",
-                        theme === 'light' ? 'text-gray-500' : 'text-zinc-500'
-                      )}>{model.desc}</span>
-                    </button>
-                  ))}
-                </div>
+                {/* Pinned */}
+                {filteredConversations.pinned.length > 0 && (
+                  <>
+                    <div className={clsx(
+                      "flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold uppercase tracking-wider",
+                      theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+                    )}>
+                      <Pin size={12} /> Pinned
+                    </div>
+                    {filteredConversations.pinned.map((c) => conversationItem(c))}
+                  </>
+                )}
+                {/* Normal */}
+                {filteredConversations.normal.length > 0 && (
+                  filteredConversations.normal.map((c) => conversationItem(c))
+                )}
+                {/* Archived */}
+                {settings.showArchived && filteredConversations.archived.length > 0 && (
+                  <>
+                    <div className={clsx(
+                      "flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold uppercase tracking-wider mt-2",
+                      theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+                    )}>
+                      <Archive size={12} /> Archived
+                    </div>
+                    {filteredConversations.archived.map((c) => conversationItem(c, true))}
+                  </>
+                )}
+                {/* Show archived button */}
+                {!settings.showArchived && filteredConversations.archived.length > 0 && (
+                  <button
+                    onClick={() => setSettings((s) => ({ ...s, showArchived: true }))}
+                    className={clsx(
+                      "w-full text-center text-xs py-2 rounded-lg transition-colors",
+                      theme === 'light' ? 'text-gray-400 hover:text-gray-600 hover:bg-gray-50' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'
+                    )}
+                  >
+                    Show archived ({filteredConversations.archived.length})
+                  </button>
+                )}
+                {settings.showArchived && filteredConversations.archived.length > 0 && (
+                  <button
+                    onClick={() => setSettings((s) => ({ ...s, showArchived: false }))}
+                    className={clsx(
+                      "w-full text-center text-xs py-2 rounded-lg transition-colors",
+                      theme === 'light' ? 'text-gray-400 hover:text-gray-600 hover:bg-gray-50' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'
+                    )}
+                  >
+                    Hide archived
+                  </button>
+                )}
               </>
             )}
           </div>
+        </aside>
 
-          <h2 className={clsx(
-            "text-sm font-medium truncate flex-1",
-            theme === 'light' ? 'text-gray-600' : 'text-zinc-300'
+        {/* Main */}
+        <main className="flex-1 flex flex-col min-w-0">
+          {/* Header */}
+          <header className={clsx(
+            "h-14 border-b flex items-center px-4 gap-3 backdrop-blur",
+            theme === 'light'
+              ? 'border-gray-200 bg-white/80'
+              : 'border-zinc-800 bg-zinc-950/80'
           )}>
-            {activeConversation?.title || "Hermes Chat"}
-          </h2>
+            <button onClick={() => setSidebarOpen(true)} className={clsx(
+              "md:hidden",
+              theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
+            )}>
+              <Menu size={20} />
+            </button>
 
-          {/* Export button */}
-          {activeConversation && activeConversation.messages.length > 0 && (
+            {/* Model Selector */}
             <div className="relative">
               <button
-                onClick={() => setExportDropdownOpen(!exportDropdownOpen)}
+                onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
                 className={clsx(
-                  "flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-sm transition-colors",
+                  "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors",
                   theme === 'light'
-                    ? 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                    ? 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
                 )}
-                title="Export"
               >
-                <Download size={16} />
-                <span className="hidden sm:inline text-xs">Export</span>
+                <Bot size={14} className="text-emerald-400" />
+                <span className="hidden sm:inline">{availableModels.find(m => m.id === selectedModel)?.name || selectedModel}</span>
+                <ChevronDown size={14} className={`transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
-              {exportDropdownOpen && (
+
+              {modelDropdownOpen && (
                 <>
-                  <div className="fixed inset-0 z-40" onClick={() => setExportDropdownOpen(false)} />
+                  <div className="fixed inset-0 z-40" onClick={() => setModelDropdownOpen(false)} />
                   <div className={clsx(
-                    "absolute right-0 top-full mt-1 w-48 border rounded-lg shadow-xl z-50 py-1",
+                    "absolute top-full left-0 mt-1 w-64 border rounded-lg shadow-xl z-50 py-1 max-h-80 overflow-y-auto",
                     theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
                   )}>
-                    <button
-                      onClick={exportAsJSON}
-                      className={clsx(
-                        "w-full text-left px-4 py-2.5 text-sm transition-colors",
-                        theme === 'light' ? 'text-gray-700 hover:bg-gray-50' : 'text-zinc-300 hover:bg-zinc-800'
-                      )}
-                    >
-                      Export as JSON
-                    </button>
-                    <button
-                      onClick={exportAsMarkdown}
-                      className={clsx(
-                        "w-full text-left px-4 py-2.5 text-sm transition-colors",
-                        theme === 'light' ? 'text-gray-700 hover:bg-gray-50' : 'text-zinc-300 hover:bg-zinc-800'
-                      )}
-                    >
-                      Export as Markdown
-                    </button>
+                    {availableModels.map((model) => (
+                      <button
+                        key={model.id}
+                        onClick={() => { setSelectedModel(model.id); setModelDropdownOpen(false); }}
+                        title={model.desc}
+                        className={clsx(
+                          "w-full text-left px-4 py-2.5 transition-colors",
+                          selectedModel === model.id
+                            ? theme === 'light' ? 'bg-gray-100' : 'bg-zinc-800'
+                            : theme === 'light' ? 'hover:bg-gray-50' : 'hover:bg-zinc-800'
+                        )}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className={clsx(
+                            "text-sm font-medium",
+                            theme === 'light' ? 'text-gray-800' : 'text-zinc-200'
+                          )}>{model.name}</span>
+                          {selectedModel === model.id && <Check size={14} className="text-emerald-400" />}
+                        </div>
+                        <span className={clsx(
+                          "text-xs",
+                          theme === 'light' ? 'text-gray-500' : 'text-zinc-500'
+                        )}>{model.desc}</span>
+                      </button>
+                    ))}
                   </div>
                 </>
               )}
             </div>
-          )}
 
-          {/* Settings button */}
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className={clsx(
-              "flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-sm transition-colors",
-              theme === 'light'
-                ? 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+            <h2 className={clsx(
+              "text-sm font-medium truncate flex-1",
+              theme === 'light' ? 'text-gray-600' : 'text-zinc-300'
+            )}>
+              {activeConversation?.title || "Hermes Chat"}
+            </h2>
+
+            {/* Token counter in header */}
+            {activeConversation && activeConversation.messages.length > 0 && (
+              <span className={clsx(
+                "text-xs px-2 py-0.5 rounded-full",
+                theme === 'light' ? 'bg-gray-100 text-gray-500' : 'bg-zinc-800 text-zinc-500'
+              )} title="Total tokens used">
+                {currentTokens > 0 ? `${currentTokens} tokens` : "-- tokens"}
+              </span>
             )}
-            title="Settings"
-          >
-            <Settings size={16} />
-          </button>
 
-          {/* Auth */}
-          {authLoading ? (
-            <div className={clsx(
-              "w-8 h-8 rounded-full animate-pulse",
-              theme === 'light' ? 'bg-gray-200' : 'bg-zinc-800'
-            )} />
-          ) : user ? (
-            <div className="flex items-center gap-2">
-              {user.user_metadata?.avatar_url ? (
-                <img
-                  src={user.user_metadata.avatar_url}
-                  alt={user.user_metadata?.full_name || "User"}
-                  className="w-7 h-7 rounded-full"
-                />
-              ) : (
-                <div className={clsx(
-                  "w-7 h-7 rounded-full flex items-center justify-center",
-                  theme === 'light' ? 'bg-gray-200 text-gray-500' : 'bg-zinc-700 text-zinc-400'
-                )}>
-                  <User size={14} />
-                </div>
-              )}
-              <button
-                onClick={signOut}
-                className={clsx(
-                  "transition-colors",
-                  theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
+            {/* Export button */}
+            {activeConversation && activeConversation.messages.length > 0 && (
+              <div className="relative">
+                <button
+                  onClick={() => setExportDropdownOpen(!exportDropdownOpen)}
+                  className={clsx(
+                    "flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-sm transition-colors",
+                    theme === 'light'
+                      ? 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                  )}
+                  title="Export"
+                >
+                  <Download size={16} />
+                  <span className="hidden sm:inline text-xs">Export</span>
+                </button>
+                <button
+                  onClick={() => setShareModalOpen(true)}
+                  className={clsx(
+                    "flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-sm transition-colors",
+                    theme === 'light'
+                      ? 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                  )}
+                  title="Share"
+                >
+                  <Share2 size={16} />
+                  <span className="hidden sm:inline text-xs">Share</span>
+                </button>
+                {exportDropdownOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setExportDropdownOpen(false)} />
+                    <div className={clsx(
+                      "absolute right-0 top-full mt-1 w-48 border rounded-lg shadow-xl z-50 py-1",
+                      theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
+                    )}>
+                      <button
+                        onClick={exportAsJSON}
+                        className={clsx(
+                          "w-full text-left px-4 py-2.5 text-sm transition-colors",
+                          theme === 'light' ? 'text-gray-700 hover:bg-gray-50' : 'text-zinc-300 hover:bg-zinc-800'
+                        )}
+                      >
+                        Export as JSON
+                      </button>
+                      <button
+                        onClick={exportAsMarkdown}
+                        className={clsx(
+                          "w-full text-left px-4 py-2.5 text-sm transition-colors",
+                          theme === 'light' ? 'text-gray-700 hover:bg-gray-50' : 'text-zinc-300 hover:bg-zinc-800'
+                        )}
+                      >
+                        Export as Markdown
+                      </button>
+                    </div>
+                  </>
                 )}
-                title="Logout"
-              >
-                <LogOut size={16} />
-              </button>
-            </div>
-          ) : (
+              </div>
+            )}
+
+            {/* Settings button */}
             <button
-              onClick={signInWithGithub}
+              onClick={() => setSettingsOpen(true)}
               className={clsx(
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors",
+                "flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-sm transition-colors",
                 theme === 'light'
-                  ? 'bg-gray-100 hover:bg-gray-200 text-gray-600'
-                  : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
+                  ? 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
               )}
+              title="Settings"
             >
-              <User size={14} />
-              <span className="hidden sm:inline">Login</span>
+              <Settings size={16} />
             </button>
-          )}
-        </header>
 
-        {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto">
-          {!activeConversation || activeConversation.messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full px-4">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center mb-6">
-                <Sparkles size={32} className="text-white" />
-              </div>
-              <h2 className={clsx(
-                "text-2xl font-semibold mb-2",
-                theme === 'light' ? 'text-gray-800' : 'text-zinc-100'
-              )}>How can I help?</h2>
-              <p className={clsx(
-                "mb-8 text-center max-w-md",
-                theme === 'light' ? 'text-gray-500' : 'text-zinc-400'
-              )}>Start a conversation or try one of the quick actions below.</p>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-lg w-full">
-                {quickActions.map((action) => (
-                  <button
-                    key={action.label}
-                    onClick={() => { setInput(action.prompt); textareaRef.current?.focus(); }}
-                    className={clsx(
-                      "flex flex-col items-center gap-2 p-4 rounded-xl border transition-all",
-                      theme === 'light'
-                        ? 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50 text-gray-600 hover:text-gray-900'
-                        : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/50 text-zinc-300 hover:text-zinc-100'
-                    )}
-                  >
-                    <action.icon size={20} />
-                    <span className="text-xs font-medium">{action.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="max-w-3xl mx-auto w-full px-4 py-6 space-y-6">
-              {activeConversation.messages.map((msg, idx) => (
-                <div key={msg.id} className={`group flex gap-3 ${msg.role === "user" ? "justify-end" : ""}`}>
-                  {msg.role === "assistant" && (
-                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center shrink-0 mt-1">
-                      <Sparkles size={14} className="text-white" />
-                    </div>
-                  )}
+            {/* Auth */}
+            {authLoading ? (
+              <div className={clsx(
+                "w-8 h-8 rounded-full animate-pulse",
+                theme === 'light' ? 'bg-gray-200' : 'bg-zinc-800'
+              )} />
+            ) : user ? (
+              <div className="flex items-center gap-2">
+                {user.user_metadata?.avatar_url ? (
+                  <img
+                    src={user.user_metadata.avatar_url}
+                    alt={user.user_metadata?.full_name || "User"}
+                    className="w-7 h-7 rounded-full"
+                  />
+                ) : (
                   <div className={clsx(
-                    "max-w-[85%]",
-                    msg.role === "user"
-                      ? theme === 'light'
-                        ? 'bg-emerald-50 rounded-2xl rounded-br-md px-4 py-3 text-gray-800'
-                        : 'bg-zinc-800 rounded-2xl rounded-br-md px-4 py-3 text-zinc-100'
-                      : theme === 'light' ? 'text-gray-800' : 'text-zinc-200'
+                    "w-7 h-7 rounded-full flex items-center justify-center",
+                    theme === 'light' ? 'bg-gray-200 text-gray-500' : 'bg-zinc-700 text-zinc-400'
                   )}>
-                    {editingMessageId === msg.id ? (
-                      <div className="flex flex-col gap-2">
-                        <textarea
-                          autoFocus
-                          value={editContent}
-                          onChange={(e) => setEditContent(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && !e.shiftKey) {
-                              e.preventDefault();
-                              saveEditMessage(msg.id);
-                            }
-                            if (e.key === "Escape") cancelEditMessage();
-                          }}
-                          className={clsx(
-                            "w-full resize-none rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50",
-                            theme === 'light'
-                              ? 'bg-white border-gray-300 text-gray-800'
-                              : 'bg-zinc-900 border-zinc-700 text-zinc-100'
-                          )}
-                          rows={4}
-                        />
-                        <div className="flex gap-2 justify-end">
-                          <button
-                            onClick={() => saveEditMessage(msg.id)}
-                            className="flex items-center gap-1 px-3 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium"
-                          >
-                            <Check size={12} /> Save
-                          </button>
-                          <button
-                            onClick={cancelEditMessage}
-                            className={clsx(
-                              "flex items-center gap-1 px-3 py-1 rounded-md text-xs",
-                              theme === 'light'
-                                ? 'bg-gray-200 hover:bg-gray-300 text-gray-700'
-                                : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
-                            )}
-                          >
-                            <X size={12} /> Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ) : msg.role === "user" ? (
-                      <>
-                        <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
-                        {/* Action buttons on hover */}
-                        <div className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={() => startEditMessage(msg)}
-                            className={clsx(
-                              "p-1",
-                              theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-500 hover:text-zinc-300'
-                            )}
-                            title="Edit message"
-                          >
-                            <Pencil size={12} />
-                          </button>
-                          <button
-                            onClick={() => deleteMessage(msg.id)}
-                            className={clsx(
-                              "p-1",
-                              theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
-                            )}
-                            title="Delete message"
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      </>
-                    ) : msg.content ? (
-                      <>
-                        <MessageContent content={msg.content} />
-                        {/* Action buttons on hover */}
-                        <div className="flex items-center gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {idx === activeConversation.messages.length - 1 && (
-                            <button
-                              onClick={regenerate}
-                              className={clsx(
-                                "flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors",
-                                theme === 'light'
-                                  ? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'
-                                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
-                              )}
-                              title="Regenerate"
-                            >
-                              <RotateCcw size={12} /> Regenerate
-                            </button>
-                          )}
-                          <button
-                            onClick={() => deleteMessage(msg.id)}
-                            className={clsx(
-                              "p-1",
-                              theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
-                            )}
-                            title="Delete message"
-                          >
-                            <Trash2 size={12} />
-                          </button>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="flex items-center gap-1.5 py-2">
-                        <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
-                        <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse [animation-delay:0.2s]" />
-                        <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse [animation-delay:0.4s]" />
-                      </div>
-                    )}
-
-                    {/* Timestamp */}
-                    {msg.createdAt && (
-                      <div className={clsx(
-                        "text-xs mt-1",
-                        editingMessageId === msg.id ? "hidden" : "",
-                        theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
-                      )}>
-                        {formatRelativeTime(new Date(msg.createdAt))}
-                      </div>
-                    )}
+                    <User size={14} />
                   </div>
-                </div>
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-          )}
-        </div>
-
-        {/* Input Area */}
-        <div className={clsx(
-          "border-t p-4 backdrop-blur",
-          theme === 'light'
-            ? 'border-gray-200 bg-white/80'
-            : 'border-zinc-800 bg-zinc-950/80'
-        )}>
-          <div className="max-w-3xl mx-auto relative">
-            {/* File previews */}
-            {files.length > 0 && (
-              <div className="flex flex-wrap gap-2 mb-2">
-                {files.map((file, i) => {
-                  const isImage = file.type.startsWith("image/");
-                  const previewUrl = imagePreviews[i];
-                  return (
-                    <div key={i} className="relative group/file">
-                      {isImage && previewUrl ? (
-                        <div className={clsx(
-                          "relative rounded-lg overflow-hidden border",
-                          theme === 'light' ? 'border-gray-300' : 'border-zinc-700'
-                        )}>
-                          <img
-                            src={previewUrl}
-                            alt={file.name}
-                            className="w-16 h-16 object-cover cursor-pointer"
-                            onClick={() => setFullscreenImage(previewUrl)}
-                          />
-                          <button
-                            onClick={() => removeFile(i)}
-                            className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/70 flex items-center justify-center text-zinc-300 hover:text-red-400 opacity-0 group-hover/file:opacity-100 transition-opacity"
-                          >
-                            <X size={10} />
-                          </button>
-                        </div>
-                      ) : (
-                        <div className={clsx(
-                          "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs",
-                          theme === 'light'
-                            ? 'bg-gray-100 text-gray-600'
-                            : 'bg-zinc-800 text-zinc-300'
-                        )}>
-                          {getFileIcon(file)}
-                          <span className="max-w-[120px] truncate">{file.name}</span>
-                          <button onClick={() => removeFile(i)} className={clsx(
-                            theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
-                          )}>
-                            <X size={12} />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                )}
+                <button
+                  onClick={signOut}
+                  className={clsx(
+                    "transition-colors",
+                    theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
+                  )}
+                  title="Logout"
+                >
+                  <LogOut size={16} />
+                </button>
               </div>
-            )}
-
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Message Hermes..."
-              rows={1}
-              className={clsx(
-                "w-full resize-none rounded-xl border px-4 py-3 pr-28 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all max-h-40 overflow-y-auto",
-                theme === 'light'
-                  ? 'bg-white border-gray-300 text-gray-800 placeholder-gray-400'
-                  : 'bg-zinc-900 border-zinc-800 text-zinc-100 placeholder-zinc-500'
-              )}
-            />
-            <div className="absolute right-3 bottom-3 flex items-center gap-1">
+            ) : (
               <button
-                onClick={() => fileInputRef.current?.click()}
+                onClick={signInWithGithub}
                 className={clsx(
-                  "p-1.5 rounded-lg transition-colors",
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors",
                   theme === 'light'
-                    ? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'
-                    : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                    ? 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300'
                 )}
-                title="Attach files"
               >
-                <Paperclip size={16} />
+                <User size={14} />
+                <span className="hidden sm:inline">Login</span>
               </button>
-              {isStreaming ? (
-                <button
-                  onClick={stopStreaming}
-                  className="p-1.5 rounded-lg bg-red-600 hover:bg-red-500 transition-colors text-white"
-                  title="Stop generating"
-                >
-                  <Square size={16} />
-                </button>
-              ) : (
-                <button
-                  onClick={() => sendMessage()}
-                  disabled={!input.trim() && files.length === 0}
-                  className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:hover:bg-emerald-600 transition-colors text-white"
-                  title="Send"
-                >
-                  <Send size={16} />
-                </button>
-              )}
-            </div>
-          </div>
-          <p className={clsx(
-            "text-center text-xs mt-2",
-            theme === 'light' ? 'text-gray-400' : 'text-zinc-600'
-          )}>Hermes can make mistakes. Verify important information.</p>
-        </div>
-      </main>
-
-      {/* Hidden file input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        accept="image/*,.txt,.pdf,.doc,.docx,.xls,.xlsx,.zip"
-        onChange={handleFileSelect}
-        className="hidden"
-      />
-
-      {/* Image Fullscreen Modal */}
-      {fullscreenImage && (
-        <div
-          className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4"
-          onClick={() => setFullscreenImage(null)}
-        >
-          <button
-            onClick={() => setFullscreenImage(null)}
-            className="absolute top-4 right-4 text-zinc-400 hover:text-zinc-200 p-2"
-          >
-            <X size={24} />
-          </button>
-          <img
-            src={fullscreenImage}
-            alt="Preview"
-            className="max-w-full max-h-full object-contain rounded-lg"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
-
-      {/* Settings Modal */}
-      {settingsOpen && (
-        <div
-          className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4"
-          onClick={() => setSettingsOpen(false)}
-        >
-          <div
-            className={clsx(
-              "w-full max-w-md border rounded-2xl p-6 shadow-2xl",
-              theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
             )}
-            onClick={(e) => e.stopPropagation()}
+          </header>
+
+          {/* Messages Area */}
+          <div
+            ref={messagesContainerRef}
+            onScroll={handleScroll}
+            className="flex-1 overflow-y-auto"
           >
-            <div className="flex items-center justify-between mb-6">
-              <h2 className={clsx(
-                "text-lg font-semibold flex items-center gap-2",
-                theme === 'light' ? 'text-gray-900' : 'text-zinc-100'
-              )}>
-                <Settings size={18} /> Settings
-              </h2>
-              <button
-                onClick={() => setSettingsOpen(false)}
-                className={clsx(
-                  "p-1",
-                  theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
-                )}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {/* Theme Toggle */}
-            <div className="mb-5">
-              <label className={clsx(
-                "text-sm font-medium mb-2 block",
-                theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
-              )}>Theme</label>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setSettings((s) => ({ ...s, theme: "dark" }))}
-                  className={clsx(
-                    "flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm transition-colors",
-                    settings.theme === "dark"
-                      ? theme === 'light'
-                        ? 'bg-gray-200 text-gray-800 ring-1 ring-emerald-500'
-                        : 'bg-zinc-700 text-zinc-100 ring-1 ring-emerald-500'
-                      : theme === 'light'
-                        ? 'bg-gray-100 text-gray-400 hover:text-gray-600'
-                        : 'bg-zinc-800 text-zinc-400 hover:text-zinc-300'
-                  )}
-                >
-                  <Moon size={16} /> Dark
-                </button>
-                <button
-                  onClick={() => setSettings((s) => ({ ...s, theme: "light" }))}
-                  className={clsx(
-                    "flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm transition-colors",
-                    settings.theme === "light"
-                      ? theme === 'light'
-                        ? 'bg-gray-200 text-gray-800 ring-1 ring-emerald-500'
-                        : 'bg-zinc-700 text-zinc-100 ring-1 ring-emerald-500'
-                      : theme === 'light'
-                        ? 'bg-gray-100 text-gray-400 hover:text-gray-600'
-                        : 'bg-zinc-800 text-zinc-400 hover:text-zinc-300'
-                  )}
-                >
-                  <Sun size={16} /> Light
-                </button>
-              </div>
-            </div>
-
-            {/* Temperature Slider */}
-            <div className="mb-5">
-              <label className={clsx(
-                "text-sm font-medium mb-2 flex items-center gap-2",
-                theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
-              )}>
-                <Sliders size={14} /> Temperature: {settings.temperature.toFixed(1)}
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.1"
-                value={settings.temperature}
-                onChange={(e) => setSettings((s) => ({ ...s, temperature: parseFloat(e.target.value) }))}
-                className={clsx(
-                  "w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-500",
-                  theme === 'light' ? 'bg-gray-200' : 'bg-zinc-700'
-                )}
-              />
-              <div className={clsx(
-                "flex justify-between text-xs mt-1",
-                theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
-              )}>
-                <span>Precise (0)</span>
-                <span>Creative (1)</span>
-              </div>
-            </div>
-
-            {/* Model Selector */}
-            <div className="mb-5">
-              <label className={clsx(
-                "text-sm font-medium mb-2 block",
-                theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
-              )}>Model</label>
-              <div className={clsx(
-                "max-h-40 overflow-y-auto space-y-1 rounded-lg border p-1",
-                theme === 'light' ? 'border-gray-200' : 'border-zinc-700'
-              )}>
-                {availableModels.map((model) => {
-                  const isSelected = selectedModel === model.id;
-                  return (
+            {!activeConversation || activeConversation.messages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full px-4 animate-slide-up">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center mb-6">
+                  <Sparkles size={32} className="text-white" />
+                </div>
+                <h2 className={clsx(
+                  "text-2xl font-semibold mb-2",
+                  theme === 'light' ? 'text-gray-800' : 'text-zinc-100'
+                )}>How can I help?</h2>
+                <p className={clsx(
+                  "mb-8 text-center max-w-md",
+                  theme === 'light' ? 'text-gray-500' : 'text-zinc-400'
+                )}>Start a conversation or try one of the quick actions below.</p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-lg w-full">
+                  {quickActions.map((action) => (
                     <button
-                      key={model.id}
-                      onClick={() => setSelectedModel(model.id)}
+                      key={action.label}
+                      onClick={() => { setInput(action.prompt); textareaRef.current?.focus(); }}
                       className={clsx(
-                        "w-full text-left px-3 py-2 rounded-md text-sm transition-colors",
-                        isSelected
-                          ? theme === 'light'
-                            ? 'bg-emerald-50 text-emerald-700 font-medium'
-                            : 'bg-emerald-600/10 text-emerald-400 font-medium'
-                          : theme === 'light'
-                            ? 'hover:bg-gray-100 text-gray-700'
-                            : 'hover:bg-zinc-800 text-zinc-300'
+                        "flex flex-col items-center gap-2 p-4 rounded-xl border transition-all",
+                        theme === 'light'
+                          ? 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50 text-gray-600 hover:text-gray-900'
+                          : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/50 text-zinc-300 hover:text-zinc-100'
                       )}
                     >
-                      <div className="flex items-center justify-between">
-                        <span>{model.name}</span>
-                        {isSelected && <Check size={14} className="text-emerald-400 shrink-0" />}
-                      </div>
-                      <span className={clsx(
-                        "text-xs",
-                        theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
-                      )}>{model.desc}</span>
+                      <action.icon size={20} />
+                      <span className="text-xs font-medium">{action.label}</span>
                     </button>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="max-w-3xl mx-auto w-full px-4 py-6 space-y-6">
+                {activeConversation.messages.map((msg, idx) => (
+                  <div key={msg.id} className={`group flex gap-3 animate-message-in ${msg.role === "user" ? "justify-end" : ""}`}
+                    style={{ animationDelay: `${idx * 0.05}s` }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setContextMenu({ x: e.clientX, y: e.clientY, messageId: msg.id, role: msg.role });
+                    }}
+                  >
+                    {msg.role === "assistant" && (
+                      <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center shrink-0 mt-1">
+                        <Sparkles size={14} className="text-white" />
+                      </div>
+                    )}
+                    <div className={clsx(
+                      "max-w-[85%]",
+                      msg.role === "user"
+                        ? theme === 'light'
+                          ? 'bg-emerald-50 rounded-2xl rounded-br-md px-4 py-3 text-gray-800'
+                          : 'bg-zinc-800 rounded-2xl rounded-br-md px-4 py-3 text-zinc-100'
+                        : theme === 'light' ? 'text-gray-800' : 'text-zinc-200'
+                    )}>
+                      {editingMessageId === msg.id ? (
+                        <div className="flex flex-col gap-2">
+                          <textarea
+                            autoFocus
+                            value={editContent}
+                            onChange={(e) => setEditContent(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                saveEditMessage(msg.id);
+                              }
+                              if (e.key === "Escape") cancelEditMessage();
+                            }}
+                            className={clsx(
+                              "w-full resize-none rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50",
+                              theme === 'light'
+                                ? 'bg-white border-gray-300 text-gray-800'
+                                : 'bg-zinc-900 border-zinc-700 text-zinc-100'
+                            )}
+                            rows={4}
+                          />
+                          <div className="flex gap-2 justify-end">
+                            <button
+                              onClick={() => saveEditMessage(msg.id)}
+                              className="flex items-center gap-1 px-3 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium"
+                            >
+                              <Check size={12} /> Save
+                            </button>
+                            <button
+                              onClick={cancelEditMessage}
+                              className={clsx(
+                                "flex items-center gap-1 px-3 py-1 rounded-md text-xs",
+                                theme === 'light'
+                                  ? 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                  : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+                              )}
+                            >
+                              <X size={12} /> Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : msg.role === "user" ? (
+                        <>
+                          <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+                          {/* Action buttons on hover */}
+                          <div className="flex items-center gap-1 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => startEditMessage(msg)}
+                              className={clsx(
+                                "p-1",
+                                theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-500 hover:text-zinc-300'
+                              )}
+                              title="Edit message"
+                            >
+                              <Pencil size={12} />
+                            </button>
+                            <button
+                              onClick={() => deleteMessage(msg.id)}
+                              className={clsx(
+                                "p-1",
+                                theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
+                              )}
+                              title="Delete message"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </>
+                      ) : msg.content ? (
+                        <>
+                          <MessageContent content={msg.content} />
+                          {/* Action buttons on hover */}
+                          <div className="flex items-center gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {idx === activeConversation.messages.length - 1 && (
+                              <button
+                                onClick={regenerate}
+                                className={clsx(
+                                  "flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors",
+                                  theme === 'light'
+                                    ? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'
+                                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                                )}
+                                title="Regenerate"
+                              >
+                                <RotateCcw size={12} /> Regenerate
+                              </button>
+                            )}
+                            <button
+                              onClick={() => deleteMessage(msg.id)}
+                              className={clsx(
+                                "p-1",
+                                theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
+                              )}
+                              title="Delete message"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex items-center gap-1.5 py-2">
+                          <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                          <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse [animation-delay:0.2s]" />
+                          <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse [animation-delay:0.4s]" />
+                        </div>
+                      )}
 
-            {/* System Instructions */}
-            <div className="mb-5">
-              <label className={clsx(
-                "text-sm font-medium mb-2 block",
-                theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
-              )}>System Instructions</label>
+                      {/* Timestamp */}
+                      {msg.createdAt && (
+                        <div className={clsx(
+                          "text-xs mt-1",
+                          editingMessageId === msg.id ? "hidden" : "",
+                          theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+                        )}>
+                          {formatRelativeTime(new Date(msg.createdAt))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+          </div>
+
+          {/* Input Area */}
+          <div className={clsx(
+            "border-t p-4 backdrop-blur",
+            theme === 'light'
+              ? 'border-gray-200 bg-white/80'
+              : 'border-zinc-800 bg-zinc-950/80'
+          )}>
+            <div className="max-w-3xl mx-auto relative">
+              {/* File previews */}
+              {files.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {files.map((file, i) => {
+                    const isImage = file.type.startsWith("image/");
+                    const previewUrl = imagePreviews[i];
+                    return (
+                      <div key={i} className="relative group/file">
+                        {isImage && previewUrl ? (
+                          <div className={clsx(
+                            "relative rounded-lg overflow-hidden border",
+                            theme === 'light' ? 'border-gray-300' : 'border-zinc-700'
+                          )}>
+                            <img
+                              src={previewUrl}
+                              alt={file.name}
+                              className="w-16 h-16 object-cover cursor-pointer"
+                              onClick={() => setFullscreenImage(previewUrl)}
+                            />
+                            <button
+                              onClick={() => removeFile(i)}
+                              className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/70 flex items-center justify-center text-zinc-300 hover:text-red-400 opacity-0 group-hover/file:opacity-100 transition-opacity"
+                            >
+                              <X size={10} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className={clsx(
+                            "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs",
+                            theme === 'light'
+                              ? 'bg-gray-100 text-gray-600'
+                              : 'bg-zinc-800 text-zinc-300'
+                          )}>
+                            {getFileIcon(file)}
+                            <span className="max-w-[120px] truncate">{file.name}</span>
+                            <button onClick={() => removeFile(i)} className={clsx(
+                              theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
+                            )}>
+                              <X size={12} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               <textarea
-                value={settings.systemInstructions}
-                onChange={(e) => setSettings((s) => ({ ...s, systemInstructions: e.target.value }))}
-                placeholder="Optional system prompt..."
-                rows={4}
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Message Hermes..."
+                rows={1}
                 className={clsx(
-                  "w-full resize-none rounded-lg border px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50",
+                  "w-full resize-none rounded-xl border px-4 py-3 pr-28 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 transition-all max-h-40 overflow-y-auto",
                   theme === 'light'
                     ? 'bg-white border-gray-300 text-gray-800 placeholder-gray-400'
-                    : 'bg-zinc-800 border-zinc-700 text-zinc-200 placeholder-zinc-500'
+                    : 'bg-zinc-900 border-zinc-800 text-zinc-100 placeholder-zinc-500'
                 )}
               />
+              <div className="absolute right-3 bottom-3 flex items-center gap-1">
+                {/* Web search toggle */}
+                <button
+                  onClick={() => setWebSearchEnabled(!webSearchEnabled)}
+                  className={clsx(
+                    "p-1.5 rounded-lg transition-colors",
+                    webSearchEnabled
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                      : theme === 'light'
+                        ? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'
+                        : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                  )}
+                  title={webSearchEnabled ? "Web search enabled" : "Web search disabled"}
+                >
+                  <Globe size={16} />
+                </button>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className={clsx(
+                    "p-1.5 rounded-lg transition-colors",
+                    theme === 'light'
+                      ? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'
+                      : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                  )}
+                  title="Attach files"
+                >
+                  <Paperclip size={16} />
+                </button>
+                {isStreaming ? (
+                  <button
+                    onClick={stopStreaming}
+                    className="p-1.5 rounded-lg bg-red-600 hover:bg-red-500 transition-colors text-white"
+                    title="Stop generating"
+                  >
+                    <Square size={16} />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => sendMessage()}
+                    disabled={!input.trim() && files.length === 0}
+                    className="p-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 disabled:hover:bg-emerald-600 transition-colors text-white"
+                    title="Send"
+                  >
+                    <Send size={16} />
+                  </button>
+                )}
+              </div>
             </div>
-
-            <button
-              onClick={() => setSettingsOpen(false)}
-              className="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-colors"
-            >
-              Done
-            </button>
+            <p className={clsx(
+              "text-center text-xs mt-2",
+              theme === 'light' ? 'text-gray-400' : 'text-zinc-600'
+            )}>Hermes can make mistakes. Verify important information.</p>
+            {totalTokens > 0 && (
+              <p className={clsx(
+                "text-center text-xs mt-1",
+                theme === 'light' ? 'text-gray-400' : 'text-zinc-600'
+              )}>Tokens: {totalTokens}</p>
+            )}
           </div>
-        </div>
-      )}
-    </div>
+        </main>
+
+        {/* Auto-scroll button */}
+        {activeConversation && activeConversation.messages.length > 0 && !autoScroll && (
+          <button
+            onClick={() => {
+              setAutoScroll(true);
+              messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            }}
+            className={clsx(
+              "fixed bottom-28 left-1/2 -translate-x-1/2 z-50 p-2 rounded-full shadow-lg transition-colors",
+              theme === 'light'
+                ? 'bg-white border border-gray-200 text-gray-600 hover:text-gray-900'
+                : 'bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-zinc-200'
+            )}
+            title="Scroll to bottom"
+          >
+            <ChevronDown size={20} />
+          </button>
+        )}
+
+        {/* Context Menu */}
+        {contextMenu && (
+          <>
+            <div className="fixed inset-0 z-[150]" onClick={() => setContextMenu(null)} />
+            <div
+              className={clsx(
+                "fixed z-[160] border rounded-lg shadow-xl py-1 min-w-[180px] animate-slide-up",
+                theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
+              )}
+              style={{ left: contextMenu.x, top: contextMenu.y }}
+            >
+              <button
+                onClick={() => {
+                  const conv = activeConversation;
+                  if (!conv) return;
+                  const msg = conv.messages.find(m => m.id === contextMenu.messageId);
+                  if (msg) navigator.clipboard.writeText(msg.content);
+                  setContextMenu(null);
+                }}
+                className={clsx(
+                  "w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors",
+                  theme === 'light' ? 'text-gray-700 hover:bg-gray-50' : 'text-zinc-300 hover:bg-zinc-800'
+                )}
+              >
+                <Copy size={14} /> Copy text
+              </button>
+              <button
+                onClick={() => {
+                  const msg = activeConversation?.messages.find(m => m.id === contextMenu.messageId);
+                  if (msg) { setEditingMessageId(msg.id); setEditContent(msg.content); }
+                  setContextMenu(null);
+                }}
+                className={clsx(
+                  "w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors",
+                  theme === 'light' ? 'text-gray-700 hover:bg-gray-50' : 'text-zinc-300 hover:bg-zinc-800'
+                )}
+              >
+                <Pencil size={14} /> Edit message
+              </button>
+              <button
+                onClick={() => {
+                  if (window.confirm("Delete this message and all following messages?")) {
+                    deleteMessage(contextMenu.messageId);
+                  }
+                  setContextMenu(null);
+                }}
+                className={clsx(
+                  "w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors",
+                  theme === 'light' ? 'text-gray-700 hover:bg-gray-50' : 'text-zinc-300 hover:bg-zinc-800'
+                )}
+              >
+                <Trash2 size={14} /> Delete message
+              </button>
+              <div className={clsx(
+                "border-t my-1",
+                theme === 'light' ? 'border-gray-200' : 'border-zinc-800'
+              )} />
+              <button
+                onClick={() => {
+                  forkConversation(contextMenu.messageId);
+                  setContextMenu(null);
+                }}
+                className={clsx(
+                  "w-full text-left px-4 py-2 text-sm flex items-center gap-2 transition-colors",
+                  theme === 'light' ? 'text-gray-700 hover:bg-gray-50' : 'text-zinc-300 hover:bg-zinc-800'
+                )}
+              >
+                <GitFork size={14} /> Fork conversation
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Share Modal */}
+        {shareModalOpen && (
+          <div
+            className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4 animate-modal-overlay"
+            onClick={() => setShareModalOpen(false)}
+          >
+            <div
+              className={clsx(
+                "w-full max-w-md border rounded-2xl p-6 shadow-2xl animate-modal-content",
+                theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
+              )}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h2 className={clsx(
+                  "text-lg font-semibold flex items-center gap-2",
+                  theme === 'light' ? 'text-gray-900' : 'text-zinc-100'
+                )}>
+                  <Share2 size={18} /> Share
+                </h2>
+                <button
+                  onClick={() => setShareModalOpen(false)}
+                  className={clsx(
+                    "p-1",
+                    theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
+                  )}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <p className={clsx(
+                "text-sm mb-3",
+                theme === 'light' ? 'text-gray-600' : 'text-zinc-400'
+              )}>Share this conversation with a public link.</p>
+              <div className="flex gap-2">
+                <input
+                  readOnly
+                  value={`https://hermesai-eight.vercel.app/api/share/${activeConversation?.id.slice(0, 12)}`}
+                  className={clsx(
+                    "flex-1 px-3 py-2 rounded-lg text-sm border focus:outline-none",
+                    theme === 'light'
+                      ? 'bg-gray-50 border-gray-300 text-gray-800'
+                      : 'bg-zinc-800 border-zinc-700 text-zinc-200'
+                  )}
+                  onClick={(e) => (e.target as HTMLInputElement).select()}
+                />
+                <button
+                  onClick={() => {
+                    const link = `https://hermesai-eight.vercel.app/api/share/${activeConversation?.id.slice(0, 12)}`;
+                    navigator.clipboard.writeText(link);
+                  }}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-colors flex items-center gap-1"
+                >
+                  <Copy size={14} /> Copy Link
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*,.txt,.pdf,.doc,.docx,.xls,.xlsx,.zip"
+          onChange={handleFileSelect}
+          className="hidden"
+        />
+
+        {/* Image Fullscreen Modal */}
+        {fullscreenImage && (
+          <div
+            className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 animate-modal-overlay"
+            onClick={() => setFullscreenImage(null)}
+          >
+            <button
+              onClick={() => setFullscreenImage(null)}
+              className="absolute top-4 right-4 text-zinc-400 hover:text-zinc-200 p-2"
+            >
+              <X size={24} />
+            </button>
+            <img
+              src={fullscreenImage}
+              alt="Preview"
+              className="max-w-full max-h-full object-contain rounded-lg animate-modal-content"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        )}
+
+        {/* Settings Modal */}
+        {settingsOpen && (
+          <div
+            className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4 animate-modal-overlay"
+            onClick={() => setSettingsOpen(false)}
+          >
+            <div
+              className={clsx(
+                "w-full max-w-md border rounded-2xl p-6 shadow-2xl animate-modal-content",
+                theme === 'light' ? 'bg-white border-gray-200' : 'bg-zinc-900 border-zinc-800'
+              )}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className={clsx(
+                  "text-lg font-semibold flex items-center gap-2",
+                  theme === 'light' ? 'text-gray-900' : 'text-zinc-100'
+                )}>
+                  <Settings size={18} /> Settings
+                </h2>
+                <button
+                  onClick={() => setSettingsOpen(false)}
+                  className={clsx(
+                    "p-1",
+                    theme === 'light' ? 'text-gray-400 hover:text-gray-700' : 'text-zinc-400 hover:text-zinc-200'
+                  )}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Theme Toggle */}
+              <div className="mb-5">
+                <label className={clsx(
+                  "text-sm font-medium mb-2 block",
+                  theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
+                )}>Theme</label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setSettings((s) => ({ ...s, theme: "dark" }))}
+                    className={clsx(
+                      "flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm transition-colors",
+                      settings.theme === "dark"
+                        ? theme === 'light'
+                          ? 'bg-gray-200 text-gray-800 ring-1 ring-emerald-500'
+                          : 'bg-zinc-700 text-zinc-100 ring-1 ring-emerald-500'
+                        : theme === 'light'
+                          ? 'bg-gray-100 text-gray-400 hover:text-gray-600'
+                          : 'bg-zinc-800 text-zinc-400 hover:text-zinc-300'
+                    )}
+                  >
+                    <Moon size={16} /> Dark
+                  </button>
+                  <button
+                    onClick={() => setSettings((s) => ({ ...s, theme: "light" }))}
+                    className={clsx(
+                      "flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm transition-colors",
+                      settings.theme === "light"
+                        ? theme === 'light'
+                          ? 'bg-gray-200 text-gray-800 ring-1 ring-emerald-500'
+                          : 'bg-zinc-700 text-zinc-100 ring-1 ring-emerald-500'
+                        : theme === 'light'
+                          ? 'bg-gray-100 text-gray-400 hover:text-gray-600'
+                          : 'bg-zinc-800 text-zinc-400 hover:text-zinc-300'
+                    )}
+                  >
+                    <Sun size={16} /> Light
+                  </button>
+                </div>
+              </div>
+
+              {/* Temperature Slider */}
+              <div className="mb-5">
+                <label className={clsx(
+                  "text-sm font-medium mb-2 flex items-center gap-2",
+                  theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
+                )}>
+                  <Sliders size={14} /> Temperature: {settings.temperature.toFixed(1)}
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={settings.temperature}
+                  onChange={(e) => setSettings((s) => ({ ...s, temperature: parseFloat(e.target.value) }))}
+                  className={clsx(
+                    "w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-500",
+                    theme === 'light' ? 'bg-gray-200' : 'bg-zinc-700'
+                  )}
+                />
+                <div className={clsx(
+                  "flex justify-between text-xs mt-1",
+                  theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+                )}>
+                  <span>Precise (0)</span>
+                  <span>Creative (1)</span>
+                </div>
+              </div>
+
+              {/* Custom Colors */}
+              <div className="mb-5">
+                <label className={clsx(
+                  "text-sm font-medium mb-2 block",
+                  theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
+                )}>Custom Colors</label>
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <label className="text-xs text-zinc-500 block mb-1">Accent</label>
+                    <input type="color" value={settings.accentColor || '#10b981'} onChange={(e) => setSettings((s) => ({ ...s, accentColor: e.target.value }))} className="w-full h-8 rounded cursor-pointer bg-transparent border-0" />
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-xs text-zinc-500 block mb-1">Background</label>
+                    <input type="color" value={settings.bgColor || (settings.theme === 'light' ? '#f8fafc' : '#09090b')} onChange={(e) => setSettings((s) => ({ ...s, bgColor: e.target.value }))} className="w-full h-8 rounded cursor-pointer bg-transparent border-0" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Model Selector */}
+              <div className="mb-5">
+                <label className={clsx(
+                  "text-sm font-medium mb-2 block",
+                  theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
+                )}>Model</label>
+                <div className={clsx(
+                  "max-h-40 overflow-y-auto space-y-1 rounded-lg border p-1",
+                  theme === 'light' ? 'border-gray-200' : 'border-zinc-700'
+                )}>
+                  {availableModels.map((model) => {
+                    const isSelected = selectedModel === model.id;
+                    return (
+                      <button
+                        key={model.id}
+                        onClick={() => setSelectedModel(model.id)}
+                        title={model.desc}
+                        className={clsx(
+                          "w-full text-left px-3 py-2 rounded-md text-sm transition-colors",
+                          isSelected
+                            ? theme === 'light'
+                              ? 'bg-emerald-50 text-emerald-700 font-medium'
+                              : 'bg-emerald-600/10 text-emerald-400 font-medium'
+                            : theme === 'light'
+                              ? 'hover:bg-gray-100 text-gray-700'
+                              : 'hover:bg-zinc-800 text-zinc-300'
+                        )}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span>{model.name}</span>
+                          {isSelected && <Check size={14} className="text-emerald-400 shrink-0" />}
+                        </div>
+                        <span className={clsx(
+                          "text-xs",
+                          theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+                        )}>{model.desc}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* System Instructions */}
+              <div className="mb-5">
+                <label className={clsx(
+                  "text-sm font-medium mb-2 block",
+                  theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
+                )}>System Instructions</label>
+                <textarea
+                  value={settings.systemInstructions}
+                  onChange={(e) => setSettings((s) => ({ ...s, systemInstructions: e.target.value }))}
+                  placeholder="Optional system prompt..."
+                  rows={4}
+                  className={clsx(
+                    "w-full resize-none rounded-lg border px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50",
+                    theme === 'light'
+                      ? 'bg-white border-gray-300 text-gray-800 placeholder-gray-400'
+                      : 'bg-zinc-800 border-zinc-700 text-zinc-200 placeholder-zinc-500'
+                  )}
+                />
+              </div>
+
+              {/* Prompt Presets */}
+              <div className="mb-5">
+                <label className={clsx(
+                  "text-sm font-medium mb-2 block",
+                  theme === 'light' ? 'text-gray-700' : 'text-zinc-300'
+                )}>Prompt Presets</label>
+                {presets.length === 0 ? (
+                  <p className={clsx(
+                    "text-xs mb-2",
+                    theme === 'light' ? 'text-gray-400' : 'text-zinc-500'
+                  )}>No presets saved yet.</p>
+                ) : (
+                  <div className="space-y-1 mb-2 max-h-32 overflow-y-auto">
+                    {presets.map((p, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <button
+                          onClick={() => applyPreset(p.instructions)}
+                          className={clsx(
+                            "flex-1 text-left text-xs px-2 py-1.5 rounded truncate transition-colors",
+                            theme === 'light'
+                              ? 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
+                          )}
+                          title="Load preset"
+                        >
+                          {p.name}
+                        </button>
+                        <button
+                          onClick={() => deletePreset(i)}
+                          className={clsx(
+                            "p-1 transition-colors",
+                            theme === 'light' ? 'text-gray-400 hover:text-red-500' : 'text-zinc-500 hover:text-red-400'
+                          )}
+                          title="Delete preset"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  onClick={savePreset}
+                  className={clsx(
+                    "text-xs px-3 py-1.5 rounded transition-colors",
+                    theme === 'light'
+                      ? 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
+                  )}
+                  title="Save current system instructions as preset"
+                >
+                  + Save Current as Preset
+                </button>
+              </div>
+
+              <button
+                onClick={() => setSettingsOpen(false)}
+                className="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
