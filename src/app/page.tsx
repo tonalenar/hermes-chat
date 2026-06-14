@@ -6,7 +6,6 @@ import {
   Sparkles, Code, Bug, BookOpen, Paperclip, FileText, ImageIcon,
   ChevronDown, Bot,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 
 // Types
 interface Message {
@@ -133,19 +132,15 @@ export default function Home() {
 
   const activeConversation = conversations.find((c) => c.id === activeId) || null;
 
-  // Load from Supabase
+  // Load conversations from Supabase on mount
   useEffect(() => {
     async function loadFromSupabase() {
       try {
-        const { data, error } = await supabase
-          .from("conversations")
-          .select("*")
-          .order("updated_at", { ascending: false })
-          .limit(50);
-
-        if (error) throw error;
-        if (data && data.length > 0) {
-          const convs: Conversation[] = data.map((c: any) => ({
+        const res = await fetch("/api/conversations?limit=50");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.conversations && data.conversations.length > 0) {
+          const convs: Conversation[] = data.conversations.map((c: any) => ({
             id: c.id,
             title: c.title || "New Chat",
             messages: [],
