@@ -221,6 +221,9 @@ export default function Home() {
   const dragCounter = useRef(0);
 
   const availableModels = [
+    { id: "ag/gemini-3-flash-agent", name: "Gemini 3.5 Flash High", desc: "Principal dia a dia (barato/rápido)" },
+    { id: "cx/gpt-5.5", name: "GPT 5.5 Codex", desc: "Principal para codar" },
+    { id: "ag/claude-sonnet-4-6", name: "Claude Sonnet 4.6 (Thinking)", desc: "Fallback coding" },
     { id: "kr/auto", name: "Auto Select", desc: "9Router escolhe o melhor" },
     { id: "kr/claude-opus-4.8", name: "Claude Opus 4.8", desc: "Premium coding" },
     { id: "kr/claude-opus-4.8-thinking", name: "Claude Opus 4.8 Thinking", desc: "Com reasoning" },
