@@ -221,6 +221,7 @@ export default function Home() {
   const dragCounter = useRef(0);
 
   const availableModels = [
+    { id: "ag-gemini-flash-resilient", name: "Gemini Flash Resiliente", desc: "Combo Antigravity 2 contas + Claude Sonnet 4.6" },
     { id: "ag/gemini-3-flash-agent", name: "Gemini 3.5 Flash High", desc: "Principal dia a dia (barato/rápido)" },
     { id: "cx/gpt-5.5", name: "GPT 5.5 Codex", desc: "Principal para codar" },
     { id: "ag/claude-sonnet-4-6", name: "Claude Sonnet 4.6 (Thinking)", desc: "Fallback coding" },

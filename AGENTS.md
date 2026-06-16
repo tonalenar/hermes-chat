@@ -9,21 +9,42 @@ Tudo passa pelo 9Router (localhost:20128).
 Provider: `custom:9router`
 Nunca usar providers externos diretamente - sempre rotear pelo 9Router.
 
-## Modelos - Estrategia de Uso
+## Profiles
 
-### Dia a dia (conversa, pesquisa, tarefas leves)
-- Modelo principal: `ag/gemini-3-flash-agent` (Gemini 3.5 Flash High via Antigravity)
-- Fallback 1: `kr/auto` (Kiro Auto)
-- Fallback 2: `cx/gpt-5.5` (ChatGPT/Codex)
+### default (Hermes principal)
+- Gateway: Bot Telegram @TonzinhoAlencar_bot
+- Modelo principal: `ag-gemini-flash-resilient` (combo 9Router)
+- Fallback 1: `cx/gpt-5.5` (ChatGPT/Codex)
+- Fallback 2: `kr/auto` (Kiro Auto)
 
-### Codificacao (bond007 coder)
+### designer (bond007_designer_bot)
+- Gateway: Bot Telegram @bond007_designer_bot
+- API: http://localhost:8643
+- Funcao: Design de interface (UI/UX), React/Tailwind, prototipagem rapida
+- Modelo principal: `ag-gemini-flash-resilient` (combo 9Router)
+- Fallback 1: `cx/gpt-5.5` (ChatGPT/Codex)
+- Fallback 2: `kr/auto` (Kiro Auto)
+- Skills: frontend-design, ui-ux-pro-max, creative
+
+### coder (bond007_coder_bot)
 - Modelo principal: `cx/gpt-5.5` (ChatGPT/Codex)
 - Fallback 1: `ag/claude-sonnet-4-6` (Claude 3.5 Sonnet Thinking via Antigravity)
 - Fallback 2: `ag/gemini-3-flash-agent` (Gemini 3.5 Flash High via Antigravity)
 
-### Pesquisa e Analise (bond007 researcher)
+### researcher (bond007_researcher_bot)
 - Modelo principal: `ag/gemini-3-flash-agent` (Gemini 3.5 Flash High via Antigravity)
 - Fallback: `kr/auto` (Kiro Auto)
+
+## Modelos - Estrategia de Uso
+
+### Combo Antigravity Resiliente (`ag-gemini-flash-resilient`)
+Combo criado no 9Router com fallback entre contas e modelos:
+1. `gemini-3-flash-agent` na conta tonz1nalencar@gmail.com
+2. `gemini-3-flash-agent` na conta tonzinhoweb@gmail.com
+3. `claude-sonnet-4-6` na conta tonz1nalencar@gmail.com
+4. `claude-sonnet-4-6` na conta tonzinhoweb@gmail.com
+5. (fora do combo) cx/gpt-5.5 (fallback 1 Hermes)
+6. (fora do combo) kr/auto (fallback 2 Hermes)
 
 ## Modelos Disponiveis no 9Router
 
