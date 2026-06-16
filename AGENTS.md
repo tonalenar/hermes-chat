@@ -48,24 +48,53 @@ Nunca usar providers externos diretamente - sempre rotear pelo 9Router.
 
 ## Regras de Delegacao do Time (OBRIGATORIO)
 
-O bot principal (@TonzinhoAlencar_bot) DEVE seguir estas regras ao receber tarefas:
+O bot principal (@TonzinhoAlencar_bot) DEVE seguir estas regras ao receber tarefas.
+
+### MECANISMO DE DELEGACAO
+
+Sempre usar este fluxo de 3 passos:
+
+1. **Notificar**: avisar o subagente via Telegram
+2. **Processar**: chamar a API do subagente
+3. **Responder**: mostrar o resultado na conversa principal + notificar fim no subagente
+
+Comandos disponiveis:
+```
+python3 ~/.hermes/scripts/notify_subagent.py <profile> notify "<descricao>"
+python3 ~/.hermes/scripts/delegate_to.py <profile> "<prompt>"
+python3 ~/.hermes/scripts/notify_subagent.py <profile> result "<resumo>"
+```
 
 ### CODIGO → delegar para @bond007_coder_bot
 - Tudo que envolva: escrever, refatorar, debugar, criar migrations, testar codigo
-- Usar: delegate_task com toolsets=['terminal', 'file', 'github']
-- Contexto: incluir repo path, arquivos relevantes, stack tecnologica
-- Modelo: cx/gpt-5.5 (melhor para codificacao)
-- NAO faca voce mesmo - sempre delegue
+- Profile: `coder` (porta 8644)
+- Passos:
+  ```
+  python3 ~/.hermes/scripts/notify_subagent.py coder notify "Codificacao: <descricao resumida>"
+  python3 ~/.hermes/scripts/delegate_to.py coder "<descricao completa do que codar com contexto>"
+  ```
+- Modelo do subagente: cx/gpt-5.5
+- NAO faca voce mesmo - sempre delegue codigo
 
 ### PESQUISA → delegar para @bond007_researcher_bot
 - Tudo que envolva: buscar na web, analisar documentacao, resumir artigos, levantar requisitos
-- Usar: delegate_task com toolsets=['web', 'browser']
-- Modelo: ag/gemini-3-flash-agent (mais rapido para buscas)
+- Profile: `researcher` (porta 8645)
+- Passos:
+  ```
+  python3 ~/.hermes/scripts/notify_subagent.py researcher notify "Pesquisa: <descricao>"
+  python3 ~/.hermes/scripts/delegate_to.py researcher "<o que pesquisar>"
+  ```
+- Modelo do subagente: ag/gemini-3-flash-agent (rapido para buscas)
 
 ### DESIGN → delegar para @bond007_designer_bot
 - Tudo que envolva: UI/UX, componentes React/Tailwind, prototipagem, animacoes
-- Usar: delegate_task com toolsets=['terminal', 'file', 'browser']
-- Skills: frontend-design, ui-ux-pro-max
+- Profile: `designer` (porta 8643)
+- Passos:
+  ```
+  python3 ~/.hermes/scripts/notify_subagent.py designer notify "Design: <descricao>"
+  python3 ~/.hermes/scripts/delegate_to.py designer "<o que desenhar/criar>"
+  ```
+- Skills do subagente: frontend-design, ui-ux-pro-max
 
 ### EXCECOES (pode responder direto)
 - Conversas casuais, saudacoes, duvidas rapidas
