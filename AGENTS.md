@@ -20,20 +20,58 @@ Nunca usar providers externos diretamente - sempre rotear pelo 9Router.
 ### designer (bond007_designer_bot)
 - Gateway: Bot Telegram @bond007_designer_bot
 - API: http://localhost:8643
-- Funcao: Design de interface (UI/UX), React/Tailwind, prototipagem rapida
+- Funcao: Design de interface (UI/UX), React/Tailwind, prototipagem rapida, animacoes
 - Modelo principal: `ag-gemini-flash-resilient` (combo 9Router)
 - Fallback 1: `cx/gpt-5.5` (ChatGPT/Codex)
 - Fallback 2: `kr/auto` (Kiro Auto)
 - Skills: frontend-design, ui-ux-pro-max, creative
+- SOUL.md: Personalidade de designer especialista
 
 ### coder (bond007_coder_bot)
-- Modelo principal: `cx/gpt-5.5` (ChatGPT/Codex)
+- Gateway: Bot Telegram @bond007_coder_bot
+- API: http://localhost:8644
+- Funcao: EXCLUSIVO para codificacao - escrever, refatorar, debugar, migrations, testes
+- Modelo principal: `cx/gpt-5.5` (ChatGPT/Codex) - melhor para codar
 - Fallback 1: `ag/claude-sonnet-4-6` (Claude 3.5 Sonnet Thinking via Antigravity)
 - Fallback 2: `ag/gemini-3-flash-agent` (Gemini 3.5 Flash High via Antigravity)
+- Skills: software-development, github, devops
+- SOUL.md: Personalidade de codificador exclusivo - NAO faz outras tarefas
 
 ### researcher (bond007_researcher_bot)
+- Gateway: Bot Telegram @bond007_researcher_bot
+- API: http://localhost:8645
+- Funcao: Pesquisa na web, documentacao, analise de dados, levantamento de requisitos
 - Modelo principal: `ag/gemini-3-flash-agent` (Gemini 3.5 Flash High via Antigravity)
 - Fallback: `kr/auto` (Kiro Auto)
+- Skills: research, data-science
+- SOUL.md: Personalidade de pesquisador - NAO escreve codigo
+
+## Regras de Delegacao do Time (OBRIGATORIO)
+
+O bot principal (@TonzinhoAlencar_bot) DEVE seguir estas regras ao receber tarefas:
+
+### CODIGO → delegar para @bond007_coder_bot
+- Tudo que envolva: escrever, refatorar, debugar, criar migrations, testar codigo
+- Usar: delegate_task com toolsets=['terminal', 'file', 'github']
+- Contexto: incluir repo path, arquivos relevantes, stack tecnologica
+- Modelo: cx/gpt-5.5 (melhor para codificacao)
+- NAO faca voce mesmo - sempre delegue
+
+### PESQUISA → delegar para @bond007_researcher_bot
+- Tudo que envolva: buscar na web, analisar documentacao, resumir artigos, levantar requisitos
+- Usar: delegate_task com toolsets=['web', 'browser']
+- Modelo: ag/gemini-3-flash-agent (mais rapido para buscas)
+
+### DESIGN → delegar para @bond007_designer_bot
+- Tudo que envolva: UI/UX, componentes React/Tailwind, prototipagem, animacoes
+- Usar: delegate_task com toolsets=['terminal', 'file', 'browser']
+- Skills: frontend-design, ui-ux-pro-max
+
+### EXCECOES (pode responder direto)
+- Conversas casuais, saudacoes, duvidas rapidas
+- Configuracao do proprio Hermes/9Router
+- Responder sobre status do sistema
+- Tarefas que voce ja tem contexto completo e sao rapidas (< 1min)
 
 ## Modelos - Estrategia de Uso
 
