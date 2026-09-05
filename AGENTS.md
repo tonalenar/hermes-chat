@@ -181,3 +181,47 @@ hermes config get model.default
 hermes config get model.provider
 curl -s http://localhost:20128/v1/models | python3 -c "import sys,json; [print(m['id']) for m in json.load(sys.stdin)['data']]"
 ```
+
+## Fluxo Git: branch e PR (obrigatório)
+
+Nunca commit, push ou merge direto em `main`/`master`. Toda mudança passa por: **branch → commit → push → PR → CI/review → merge**.
+
+### Quando abrir branch NOVA
+Um objetivo diferente (feature, bugfix, refactor, chore) = uma branch = uma PR.
+
+Nomes sugeridos: `feat/...`, `fix/...`, `chore/...`, `refactor/...`.
+
+### Quando REAPROVEITAR a mesma branch
+Só se a task for do **mesmo objetivo / mesmo escopo** da PR aberta (ajuste de review, completar a mesma feature, correção causada pela mesma mudança).
+
+Se não tiver certeza, **abra branch nova**. Misturar duas features na mesma PR é erro.
+
+### Como decidir antes de mexer
+1. Existe PR aberta neste repo? (`gh pr list --state open`)
+2. A task atual é claramente parte do título/descrição dessa PR?
+3. A branch ainda está ativa e não mergeada?
+
+- **Sim nos 3** → checkout da branch da PR, commit, push (atualiza a PR).
+- **Qualquer não** → `git checkout main && git pull`, cria branch nova, trabalha, push, abre PR nova.
+
+Se o usuário disser “continua na mesma” / “mesma PR”, respeite. Se for “outra coisa” / “próxima task” sem amarrar à PR, branch nova.
+
+### Fluxo passo a passo (task nova)
+1. `git status` e `git checkout main && git pull`
+2. Criar branch a partir da `main` atualizada
+3. Mudança com escopo único
+4. Commit(s) claros (mensagem = o porquê)
+5. `git push -u origin HEAD`
+6. Abrir PR (`gh pr create`) com título objetivo + body: problema, o que mudou, como testar
+7. Esperar CI / review
+8. Merge só então (preferir **squash and merge**, salvo o repo pedir outro)
+9. `git checkout main && git pull`
+
+### Várias tasks de uma vez
+Cada objetivo = uma PR. Pode haver várias branches/PRs em paralelo; **não** empilhar várias features numa branch só.
+
+### Proibido
+- Commit ou push na `main`
+- Force push na `main`
+- Merge com CI vermelho ou PR sem descrição
+- Reusar branch de feature já mergeada (crie outra a partir da `main` fresca)
